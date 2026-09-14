@@ -19,22 +19,36 @@ function App(){
  useEffect(()=>{if(!toast)return;const id=setTimeout(()=>setToast(""),2200);return()=>clearTimeout(id)},[toast]);
  async function load(){
   setProviderStatus("loading");
-  let out=[];
   try{
-   const sr=await fetch("/api/sports",{cache:"no-store"});
-   const ss=sr.ok?await sr.json():[];
-   const wanted=sport;
-   const keys=Array.isArray(ss)?ss.filter(x=>x?.active&&((x.group||"").toLowerCase()===wanted||(x.key||"").toLowerCase().startsWith(wanted+"_"))).map(x=>x.key).filter(Boolean).slice(0,6):[];
-   for(const key of keys){
+   const sportFallbacks={cricket:["cricket_caribbean_premier_league","cricket_international_t20","cricket_odi"],soccer:["soccer_epl","soccer_uefa_champs_league","soccer_usa_mls"],tennis:["tennis_wta_guadalajara_open"],basketball:["basketball_nba","basketball_wnba","basketball_euroleague"]};
+   let keys=[];
+   try{
+    const sr=await fetch("/api/sports",{cache:"no-store"});
+    if(sr.ok){
+     const ss=await sr.json();
+     if(Array.isArray(ss)) keys=ss.filter(x=>x?.active&&((x.group||"").toLowerCase()===sport||(x.key||"").toLowerCase().startsWith(sport+"_"))).map(x=>x.key).filter(Boolean);
+    }
+   }catch(err){console.warn("Sports list unavailable; using known sport keys",err)}
+   if(!keys.length) keys=sportFallbacks[sport]||[];
+   keys=[...new Set(keys)].slice(0,10);
+
+   const results=await Promise.allSettled(keys.map(async key=>{
     const r=await fetch("/api/odds/"+encodeURIComponent(key)+"?regions=eu&markets=h2h&oddsFormat=decimal",{cache:"no-store"});
-    if(!r.ok) continue;
+    if(!r.ok) throw new Error(`${key}: HTTP ${r.status}`);
     const d=await r.json();
-    if(Array.isArray(d)) out.push(...d.map(x=>({...x,sport_key:key,source:"odds-api"})));
-   }
+    return Array.isArray(d)?d.map(x=>({...x,sport_key:key,source:"odds-api"})):[];
+   }));
+   let out=[];
+   for(const result of results) if(result.status==="fulfilled") out.push(...result.value);
    out=[...new Map(out.map(x=>[x.id,x])).values()].sort((a,b)=>new Date(a.commence_time)-new Date(b.commence_time));
+
+   // Keep provider events even when bookmakers are temporarily empty; the match page can show SUSPENDED.
    setEvents(out);
    setProviderStatus(out.length?"live":"empty");
-   if(!out.length)setToast("The Odds API returned no live or upcoming matches for this sport");
+   if(!out.length){
+    const failed=results.filter(x=>x.status==="rejected").length;
+    setToast(failed===keys.length?"Unable to load odds for this sport":"No provider events available for this sport right now");
+   }
   }catch(err){
    console.error("Odds API load failed",err);
    setEvents([]);
