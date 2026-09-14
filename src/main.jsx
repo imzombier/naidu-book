@@ -1,4 +1,4 @@
-import React,{useEffect,useMemo,useState}from"react";
+import React,{Component,useEffect,useMemo,useState}from"react";
 import{createRoot}from"react-dom/client";
 import"./style.css";
 
@@ -6,10 +6,12 @@ const SPORTS=[["cricket","🏏","Cricket"],["soccer","⚽","Football"],["tennis"
 const fmt=n=>Number(n||0).toLocaleString("en-IN");
 const isLive=e=>!e?.completed&&new Date(e?.commence_time||0).getTime()<=Date.now();
 const makeLayPrice=back=>{const o=Number(back)||0;return o>5?Number((o+1).toFixed(2)):Number((o+0.04).toFixed(2));};
-const calc=(side,odds,stake)=>{const s=Math.max(0,Number(stake)||0),o=Number(odds)||0;return side==="lay"?{win:s,loss:s*Math.max(0,o-1)}:{win:s*Math.max(0,o-1),loss:s};};
+const calc=(side,odds,stake)=>{const s=Math.max(0,Number(stake)||0),o=Math.max(1.01,Number(odds)||1.01);return side==="lay"?{win:s,loss:s*Math.max(0,o-1)}:{win:s*Math.max(0,o-1),loss:s};};
+const safeToken=()=>{try{return window.localStorage.getItem("nova")||""}catch{return""}};
+class ErrorBoundary extends Component{constructor(p){super(p);this.state={error:null}}static getDerivedStateFromError(error){return{error}}componentDidCatch(error,info){console.error("NOVA PLAY render error",error,info)}render(){if(this.state.error)return <div className="page"><section className="empty big"><b>NOVA PLAY could not render this screen.</b><small>Please refresh the page. If this continues, send this error to support.</small><code style={{display:"block",marginTop:12,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{String(this.state.error?.message||this.state.error)}</code><button className="primary" onClick={()=>location.reload()}>Refresh</button></section></div>;return this.props.children}}
 
 function App(){
- const[page,setPage]=useState("home"),[sport,setSport]=useState("cricket"),[events,setEvents]=useState([]),[match,setMatch]=useState(null),[slip,setSlip]=useState([]),[favorites,setFavorites]=useState([]),[token,setToken]=useState(localStorage.getItem("nova")||""),[user,setUser]=useState(null),[auth,setAuth]=useState(false),[search,setSearch]=useState(""),[toast,setToast]=useState("");
+ const[page,setPage]=useState("home"),[sport,setSport]=useState("cricket"),[events,setEvents]=useState([]),[match,setMatch]=useState(null),[slip,setSlip]=useState([]),[favorites,setFavorites]=useState([]),[token,setToken]=useState(safeToken()),[user,setUser]=useState(null),[auth,setAuth]=useState(false),[search,setSearch]=useState(""),[toast,setToast]=useState("");
  const[homeFilter,setHomeFilter]=useState("all"),[providerStatus,setProviderStatus]=useState("loading");
  const[selected,setSelected]=useState(null);
  useEffect(()=>{if(token)fetch("/api/me",{headers:{Authorization:"Bearer "+token}}).then(r=>r.ok?r.json():null).then(x=>x&&setUser(x.user)).catch(()=>{})},[token]);
@@ -132,4 +134,5 @@ function History({token}){const[a,setA]=useState([]);useEffect(()=>{fetch("/api/
 function Games(){return <div className="page"><small>GAME LOUNGE</small><h1>Play Zone</h1><section className="gameHero"><h2>Neon Game Night</h2><p>Arcade-style demo games using virtual coins.</p>✨</section><div className="games">{["🎰 Neon Slots","🎲 Dice Lab","🃏 Card Room","🎯 Spin Arena","🕹️ Retro Rush","🏆 Prize Room"].map(x=><button key={x}><b>{x.split(" ")[0]}</b>{x.slice(2)}<small>Demo game</small></button>)}</div></div>}
 function Auth({close,done}){const[m,setM]=useState("login"),[u,setU]=useState(""),[p,setP]=useState(""),[e,setE]=useState("");async function go(){try{const r=await fetch(m==="login"?"/api/login":"/api/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})}),d=await r.json();r.ok?done(d.token,d.user):setE(d.error||"Unable to continue")}catch{setE("Network error")}}return <div className="overlay"><div className="modal"><button className="x"onClick={close}>×</button><div className="authLogo">N</div><small>{m==="login"?"WELCOME BACK":"CREATE ACCOUNT"}</small><h2>{m==="login"?"Login":"Create account"}</h2><input placeholder="Username"value={u}onChange={e=>setU(e.target.value)}/><input placeholder="Password"type="password"value={p}onChange={e=>setP(e.target.value)}/>{e&&<p className="error">{e}</p>}<button className="primary full"onClick={go}>{m==="login"?"Login":"Register"}</button><button className="switch"onClick={()=>setM(m==="login"?"register":"login")}>{m==="login"?"Create an account":"Back to login"}</button></div></div>}
 
-createRoot(document.getElementById("root")).render(<App/>);
+const root=document.getElementById("root");
+if(root)createRoot(root).render(<ErrorBoundary><App/></ErrorBoundary>);
