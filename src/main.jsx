@@ -39,35 +39,82 @@ function Home(p){return <div className="page"><section className="hero"><div><di
 function Rail({sport,setSport}){return <div className="rail">{SPORTS.map(x=><button className={sport===x[0]?"sel":""}onClick={()=>setSport(x[0])}key={x[0]}>{x[1]} {x[2]}</button>)}</div>}
 function Sports(p){return <div className="page"><div className="title"><div><small>SPORTS HUB</small><h1>All markets</h1></div><b>● LIVE</b></div><div className="searchBox"><span>⌕</span><input id="eventSearch"placeholder="Search teams, players or leagues"value={p.search}onChange={e=>p.setSearch(e.target.value)}/></div><Rail {...p}/><div className="filters"><button className="active">All</button><button>Live</button><button>Upcoming</button><button>☆ Favorites</button></div><Events {...p}/></div>}
 function Events({events,open,add,search="",favorites=[],setFavorites}){let now=Date.now(),list=events.filter(e=>`${e.home_team} ${e.away_team} ${e.sport_title}`.toLowerCase().includes(search.toLowerCase()));if(!list.length)return <div className="empty">No matching events right now.</div>;return <div className="events">{list.map(e=>{let m=e.bookmakers?.flatMap(b=>b.markets||[]).find(x=>x.key==="h2h")||e.bookmakers?.[0]?.markets?.[0],os=m?.outcomes||[],live=new Date(e.commence_time).getTime()<=now,fav=favorites.includes(e.id);return <article onClick={()=>open(e)}key={e.id}><div className="meta"><span>{live?<i className="liveBadge">● LIVE</i>:<i className="upBadge">UPCOMING</i>} · {e.sport_title||"SPORT"}</span><button className={fav?"star on":"star"} onClick={v=>{v.stopPropagation();setFavorites&&setFavorites(a=>fav?a.filter(x=>x!==e.id):[...a,e.id])}}>{fav?"★":"☆"}</button></div><div className="teams"><b>{e.home_team}</b><b>{e.away_team}</b><small>{new Date(e.commence_time).toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"})}</small></div><div className="odds">{os.slice(0,3).map((o,i)=><button onClick={v=>{v.stopPropagation();add(e,o,m)}}key={i}><small>{o.name}</small><b>{(+o.price).toFixed(2)}</b></button>)}{!os.length&&<span className="soon">Open match for markets →</span>}</div><footer><span>+{Math.max(3,e.bookmakers?.length*3||3)} markets</span><span>Open match →</span></footer></article>})}</div>}
-function Match({e,back,add,setMatch}){const[tab,setTab]=useState("all"),[stake,setStake]=useState(100),[refreshing,setRefreshing]=useState(false);useEffect(()=>{if(!e?.sport_key)return;const id=setInterval(async()=>{setRefreshing(true);try{const r=await fetch("/api/odds/"+encodeURIComponent(e.sport_key)+"?regions=eu&markets=h2h,h2h_lay,spreads,totals");if(r.ok){const a=await r.json(),n=a.find(x=>x.id===e.id);if(n)setMatch(n)}}finally{setRefreshing(false)}},20000);return()=>clearInterval(id)},[e?.id,e?.sport_key]);if(!e)return null;let ms=e.bookmakers?.flatMap(b=>b.markets||[])||[],backM=ms.find(x=>x.key==="h2h"),layM=ms.find(x=>x.key==="h2h_lay"),shown=tab==="all"?ms.filter(x=>x.key!=="h2h_lay"):ms.filter(x=>x.key===tab);const byName=n=>({back:backM?.outcomes?.find(o=>o.name===n),lay:layM?.outcomes?.find(o=>o.name===n)});return <div className="page"><button className="back"onClick={back}>← Back</button><section className="match"><div className="liveState">{new Date(e.commence_time).getTime()<=Date.now()?"● LIVE":"UPCOMING"}{refreshing&&<span> · updating odds…</span>}</div><small>{e.sport_title||"SPORT"}</small><h1>{e.home_team}</h1><strong>VS</strong><h1>{e.away_team}</h1><p>{new Date(e.commence_time).toLocaleString("en-IN",{weekday:"short",day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"})}</p></section>{backM&&<ExchangeMarket e={e}backM={backM}layM={layM}stake={stake}setStake={setStake}add={add}/>}<div className="marketTabs"><button className={tab==="all"?"active":""}onClick={()=>setTab("all")}>All</button>{ms.some(x=>x.key==="h2h")&&<button className={tab==="h2h"?"active":""}onClick={()=>setTab("h2h")}>Winner</button>}{ms.some(x=>x.key==="spreads")&&<button className={tab==="spreads"?"active":""}onClick={()=>setTab("spreads")}>Handicap</button>}{ms.some(x=>x.key==="totals")&&<button className={tab==="totals"?"active":""}onClick={()=>setTab("totals")}>Totals</button>}</div>{shown.filter(m=>m.key!=="h2h").map(m=><Market e={e}m={m}add={add}key={m.key}/>)}<div className="note">Live odds refresh about every 20 seconds in this demo, subject to the provider's update cadence. Back/Lay are shown only when exchange lay data is available.</div></div>}
+function Match({e,back,add,setMatch}){
+ const [tab,setTab]=useState("all"),[stake,setStake]=useState(100),[refreshing,setRefreshing]=useState(false);
+ useEffect(()=>{
+  if(!e?.sport_key)return;
+  const id=setInterval(async()=>{
+   setRefreshing(true);
+   try{
+    const r=await fetch("/api/odds/"+encodeURIComponent(e.sport_key)+"?regions=eu&markets=h2h,h2h_lay,spreads,totals");
+    if(r.ok){
+     const a=await r.json(),n=Array.isArray(a)?a.find(x=>x.id===e.id):null;
+     if(n)setMatch({...n,sport_key:e.sport_key});
+    }
+   }catch(err){console.log(err)}finally{setRefreshing(false)}
+  },20000);
+  return()=>clearInterval(id)
+ },[e?.id,e?.sport_key,setMatch]);
+ if(!e)return <div className="page"><div className="empty">Match not available.</div></div>;
+ const raw=Array.isArray(e.bookmakers)?e.bookmakers.flatMap(b=>Array.isArray(b?.markets)?b.markets:[]):[];
+ const ms=[]; const seen=new Set();
+ raw.forEach(m=>{if(m?.key&&!seen.has(m.key)){seen.add(m.key);ms.push(m)}});
+ const backM=ms.find(x=>x.key==="h2h"&&Array.isArray(x.outcomes));
+ const layM=ms.find(x=>x.key==="h2h_lay"&&Array.isArray(x.outcomes));
+ const shown=tab==="all"?ms.filter(x=>x.key!=="h2h_lay"):ms.filter(x=>x.key===tab);
+ const date= new Date(e.commence_time);
+ return <div className="page">
+  <button className="back" onClick={back}>← Back</button>
+  <section className="match">
+   <div className="liveState">{date.getTime()<=Date.now()?"● LIVE":"UPCOMING"}{refreshing&&<span> · updating odds…</span>}</div>
+   <small>{e.sport_title||"SPORT"}</small>
+   <h1>{e.home_team||"Home"}</h1><strong>VS</strong><h1>{e.away_team||"Away"}</h1>
+   <p>{isNaN(date.getTime())?"":date.toLocaleString("en-IN",{weekday:"short",day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"})}</p>
+  </section>
+  {backM&&<ExchangeMarket e={e} backM={backM} layM={layM} stake={stake} setStake={setStake} add={add}/>} 
+  <div className="marketTabs">
+   <button className={tab==="all"?"active":""} onClick={()=>setTab("all")}>All</button>
+   {ms.some(x=>x.key==="h2h")&&<button className={tab==="h2h"?"active":""} onClick={()=>setTab("h2h")}>Winner</button>}
+   {ms.some(x=>x.key==="spreads")&&<button className={tab==="spreads"?"active":""} onClick={()=>setTab("spreads")}>Handicap</button>}
+   {ms.some(x=>x.key==="totals")&&<button className={tab==="totals"?"active":""} onClick={()=>setTab("totals")}>Totals</button>}
+  </div>
+  {shown.filter(m=>m.key!=="h2h").map(m=><Market e={e} m={m} add={add} key={m.key}/>)}
+  <div className="note">Live odds refresh about every 20 seconds in this demo, subject to the provider's update cadence. All stakes are virtual coins.</div>
+ </div>
+}
 function ExchangeMarket({e,backM,layM,stake,setStake,add}){
  const quick=[100,250,500,1000,5000];
+ const outcomes=Array.isArray(backM?.outcomes)?backM.outcomes:[];
  return <section className="exchange">
-  <div className="exchangeHead">
-   <div><b>Match Odds</b><small>EXCHANGE · VIRTUAL COINS</small></div>
-   <div className="stakeControl"><button onClick={()=>setStake(Math.max(1,stake-100))}>−</button><input type="number" min="1" value={stake} onChange={x=>setStake(Math.max(1,+x.target.value||1))}/><button onClick={()=>setStake(stake+100)}>+</button></div>
-  </div>
+  <div className="exchangeHead"><div><b>Match Odds</b><small>EXCHANGE · VIRTUAL COINS</small></div><div className="stakeControl"><button onClick={()=>setStake(Math.max(1,stake-100))}>−</button><input type="number" min="1" value={stake} onChange={x=>setStake(Math.max(1,Number(x.target.value)||1))}/><button onClick={()=>setStake(stake+100)}>+</button></div></div>
   <div className="exchangeSub"><span>Market</span><span>BACK</span><span>LAY</span></div>
   <div className="ladderHead"><span>Selection</span><b>Price</b><b>Size</b><b>Price</b><b>Size</b></div>
-  {backM.outcomes.map(o=>{
-   const lp=layPrice(o.price), backPrices=[Math.max(1.01,+o.price-0.02),+o.price, +o.price+0.02], layPrices=[lp,lp+0.02,lp+0.04];
-   const bc=calc({stake,odds:+o.price,side:"back"}),lc=calc({stake,odds:lp,side:"lay"});
+  {outcomes.map(o=>{
+   const base=Number(o?.price)||1.01,lp=layPrice(base);
+   const backPrices=[Math.max(1.01,base-0.02),base,base+0.02];
+   const layPrices=[lp,lp+0.02,lp+0.04];
+   const bc=calc({stake,odds:base,side:"back"}),lc=calc({stake,odds:lp,side:"lay"});
    return <div className="runner" key={o.name}>
-    <div className="runnerName"><strong>{o.name}</strong><small>Back win <em>+🪙{bc.win.toFixed(0)}</em> · loss -🪙{bc.loss.toFixed(0)}</small><small>Lay win <em>+🪙{lc.win.toFixed(0)}</em> · liability -🪙{lc.loss.toFixed(0)}</small></div>
+    <div className="runnerName"><strong>{o.name||"Selection"}</strong><small>Back win <em>+🪙{bc.win.toFixed(0)}</em> · loss -🪙{bc.loss.toFixed(0)}</small><small>Lay win <em>+🪙{lc.win.toFixed(0)}</em> · liability -🪙{lc.loss.toFixed(0)}</small></div>
     <div className="priceLadder backLadder">{backPrices.map((price,i)=><button key={i} onClick={()=>add(e,{...o,price},{key:"h2h"},"back",stake)}><b>{price.toFixed(2)}</b><small>{i===1?"LIVE":"V"} · {i===1?stake*4:stake*2}</small></button>)}</div>
     <div className="priceLadder layLadder">{layPrices.map((price,i)=><button key={i} onClick={()=>add(e,{...o,price},{key:"h2h_lay"},"lay",stake)}><b>{price.toFixed(2)}</b><small>{i===0?"LIVE":"V"} · {i===0?stake*4:stake*2}</small></button>)}</div>
    </div>
   })}
+  {!outcomes.length&&<div className="empty">No match odds available right now.</div>}
   <div className="quickStake">{quick.map(x=><button className={stake===x?"chosen":""} onClick={()=>setStake(x)} key={x}>🪙 {x>=1000?(x/1000)+"K":x}</button>)}</div>
-  <div className="pnlPreview"><div><small>BACK @ selected</small><b>Win +🪙{backM.outcomes[0]?calc({stake,odds:+backM.outcomes[0].price,side:"back"}).win.toFixed(0):0}</b></div><div><small>LAY @ selected</small><b>Liability -🪙{backM.outcomes[0]?calc({stake,odds:layPrice(backM.outcomes[0].price),side:"lay"}).loss.toFixed(0):0}</b></div></div>
-  <div className="note">Lay rule: Back ≤ 5.00 → Lay +0.04 · Back &gt; 5.00 → Lay +1.00. LIVE is the provider price; V quotes are virtual ladder prices.</div>
+  <div className="pnlPreview"><div><small>BACK @ selected</small><b>Win +🪙{outcomes[0]?calc({stake,odds:Number(outcomes[0].price)||1.01,side:"back"}).win.toFixed(0):0}</b></div><div><small>LAY @ selected</small><b>Liability -🪙{outcomes[0]?calc({stake,odds:layPrice(Number(outcomes[0].price)||1.01),side:"lay"}).loss.toFixed(0):0}</b></div></div>
+  <div className="note">Lay rule: Back ≤ 5.00 → Lay +0.04 · Back &gt; 5.00 → Lay +1.00.</div>
  </section>
 }
-function Market({e,m,add}){return <section className="market"><header><b>{m.key==="spreads"?"Handicap":m.key==="totals"?"Over / Under":m.key}</b><small>VIRTUAL</small></header><div>{m.outcomes.map(o=><button onClick={()=>add(e,o,m,"back",100)}key={o.name}>{o.name}<b>{(+o.price).toFixed(2)}</b></button>)}</div></section>}
+function Market({e,m,add}){
+ const outcomes=Array.isArray(m?.outcomes)?m.outcomes:[];
+ return <section className="market"><header><b>{m.key==="spreads"?"Handicap":m.key==="totals"?"Over / Under":m.key}</b><small>VIRTUAL</small></header><div>{outcomes.map((o,i)=><button onClick={()=>add(e,o,m,"back",100)} key={o.name||i}>{o.name||"Selection"}<b>{(Number(o.price)||1.01).toFixed(2)}</b></button>)}</div>{!outcomes.length&&<div className="empty">No selections available.</div>}</section>
+}
 function Slip({items,setSlip,place}){const total=items.reduce((a,x)=>a+(+x.stake||0),0);return <div className="page"><div className="title"><div><small>YOUR PICKS</small><h1>Virtual exchange slip</h1></div>{items.length>0&&<button onClick={()=>setSlip([])}>Clear</button>}</div>{!items.length?<div className="empty big">🧾<br/><b>Slip is empty</b><small>Tap a BACK or LAY price on a match.</small></div>:<>{items.map((x,i)=>{const c=calc(x);return <div className="slip" key={i}><div><span className={x.side}>{x.side.toUpperCase()}</span><b>{x.selection}</b><small>{x.eventName} · {x.odds.toFixed(2)}</small><small>Stake 🪙 {x.stake} · Win +🪙 {c.win.toFixed(0)} · Loss -🪙 {c.loss.toFixed(0)}</small></div><button onClick={()=>setSlip(a=>a.filter((_,j)=>j!==i))}>×</button></div>})}<section className="stake"><div><b>Total stake</b><strong>🪙 {fmt(total)}</strong></div><button className="primary"onClick={()=>items.forEach(place)}>Place virtual bets</button></section></>}</div>}
 function Wallet({user,coins}){return <div className="page"><small>MY WALLET</small><h1>Coin Center</h1><section className="balance"><small>AVAILABLE VIRTUAL COINS</small><h1>🪙 {fmt(user?.coins)}</h1><button className="primary"onClick={coins}>＋ Claim 1,000</button></section><div className="note">No deposits, UPI payments or cash withdrawals are included. Coins have no cash value.</div></div>}
 function Profile({user,setPage,logout}){return <div className="page"><div className="profile"><div>{user?.username?.[0]?.toUpperCase()}</div><h1>{user?.username}</h1><small>Virtual-coin member</small></div><div className="menu"><button onClick={()=>setPage("wallet")}>🪙 Coin Center</button><button onClick={()=>setPage("history")}>📜 Bet History</button><button>⭐ Favorites</button><button>⚙️ Settings</button></div><button className="danger"onClick={logout}>Log out</button></div>}
 function History({token}){const[a,setA]=useState([]);useEffect(()=>{fetch("/api/bets",{headers:{Authorization:"Bearer "+token}}).then(r=>r.json()).then(x=>setA(x.bets||[]))},[]);return <div className="page"><small>ACCOUNT</small><h1>Bet History</h1>{a.map(x=><div className="history"key={x.id}><b>{x.selection}</b><small>{x.event_name} · 🪙 {x.stake}</small><em>{x.status}</em></div>)}{!a.length&&<div className="empty">No virtual bets yet.</div>}</div>}
 function Games(){return <div className="page"><small>GAME LOUNGE</small><h1>Play Zone</h1><section className="gameHero"><h2>Neon Game Night</h2><p>Arcade-style demo games using virtual coins.</p>✨</section><div className="games">{["🎰 Neon Slots","🎲 Dice Lab","🃏 Card Room","🎯 Spin Arena","🕹️ Retro Rush","🏆 Prize Room"].map(x=><button key={x}><b>{x.split(" ")[0]}</b>{x.slice(2)}<small>Demo game</small></button>)}</div></div>}
 function Auth({close,done}){const[m,setM]=useState("login"),[u,setU]=useState(""),[p,setP]=useState(""),[e,setE]=useState("");async function go(){let r=await fetch(m==="login"?"/api/login":"/api/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})}),d=await r.json();r.ok?done(d.token,d.user):setE(d.error)}return <div className="overlay"><div className="modal"><button className="x"onClick={close}>×</button><div className="authLogo">N</div><small>{m==="login"?"WELCOME BACK":"CREATE ACCOUNT"}</small><h2>{m==="login"?"Login":"Create account"}</h2><input placeholder="Username"value={u}onChange={e=>setU(e.target.value)}/><input placeholder="Password"type="password"value={p}onChange={e=>setP(e.target.value)}/>{e&&<p className="error">{e}</p>}<button className="primary full"onClick={go}>{m==="login"?"Login":"Register"}</button><button className="switch"onClick={()=>setM(m==="login"?"register":"login")}>{m==="login"?"Create an account":"Back to login"}</button></div></div>}
-createRoot(document.getElementById("root")).render(<App/>);
+class ErrorBoundary extends React.Component{constructor(p){super(p);this.state={error:null}}static getDerivedStateFromError(error){return{error}}componentDidCatch(error,info){console.error(error,info)}render(){if(this.state.error)return <div className="page"><section className="match"><h1>Match page error</h1><p style={{color:"#ff9aaa"}}>{String(this.state.error?.message||this.state.error)}</p><button className="primary" onClick={()=>location.reload()}>Reload</button></section></div>;return this.props.children}}
+createRoot(document.getElementById("root")).render(<ErrorBoundary><App/></ErrorBoundary>);
