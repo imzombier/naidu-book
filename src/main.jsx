@@ -56,7 +56,7 @@ function App(){
  return <>
   <header><button className="logo"onClick={()=>setPage("home")}><b>N</b><span className="brandText">NOVA<span>PLAY</span></span></button><div className="right"><button className="searchMini"onClick={()=>document.getElementById("eventSearch")?.focus()}>⌕</button><button onClick={()=>user?setPage("wallet"):setAuth(true)}>🪙 {fmt(user?.coins||0)}</button><button onClick={()=>user?setPage("profile"):setAuth(true)}>◉</button></div></header>
   <main>
-   {page==="home"&&<Home {...{setPage,sport,setSport,events,open:openMatch,search,setSearch,favorites,setFavorites,filter:homeFilter,setFilter:setHomeFilter,chooseBet}}/>}
+   {page==="home"&&<Home {...{setPage,sport,setSport,events,open:openMatch,search,setSearch,favorites,setFavorites,filter:homeFilter,setFilter:setHomeFilter,chooseBet,providerStatus}}/>}
    {page==="sports"&&<Sports {...{sport,setSport,events,open:openMatch,search,setSearch,favorites,setFavorites,chooseBet}}/>}
    {page==="match"&&<Match e={match}back={()=>setPage("home")}chooseBet={chooseBet}selected={selected}updateSelected={updateSelected}placeSelected={placeSelected}/>} 
    {page==="slip"&&<Slip items={slip}setSlip={setSlip}/>} 
@@ -69,7 +69,7 @@ function App(){
  </>;
 }
 
-function Home({setPage,sport,setSport,events,open,search,setSearch,favorites,setFavorites,filter,setFilter,chooseBet}){
+function Home({setPage,sport,setSport,events,open,search,setSearch,favorites,setFavorites,filter,setFilter,chooseBet,providerStatus}){
  const filtered=useMemo(()=>events.filter(e=>{const q=`${e.home_team} ${e.away_team} ${e.sport_title}`.toLowerCase();if(!q.includes(search.toLowerCase()))return false;return filter==="all"||(filter==="live"&&isLive(e))||(filter==="upcoming"&&!isLive(e));}),[events,search,filter]);
  const live=filtered.filter(isLive),upcoming=filtered.filter(e=>!isLive(e));
  return <div className="page homePage">
