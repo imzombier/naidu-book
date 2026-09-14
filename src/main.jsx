@@ -96,10 +96,10 @@ function EventCard({e,open,favorites,setFavorites,chooseBet}){
 
 function Sports(p){return <div className="page"><div className="title"><div><small>SPORTS HUB</small><h1>All matches</h1></div><b>● LIVE</b></div><div className="searchBox"><span>⌕</span><input id="eventSearch"placeholder="Search teams, players or leagues"value={p.search}onChange={e=>p.setSearch(e.target.value)}/></div><Rail sport={p.sport}setSport={p.setSport}/><Events events={p.events.filter(e=>`${e.home_team} ${e.away_team} ${e.sport_title}`.toLowerCase().includes(p.search.toLowerCase()))}open={p.open}favorites={p.favorites}setFavorites={p.setFavorites}chooseBet={p.chooseBet}/></div>}
 
-function Match({e,back,chooseBet,selected,updateSelected,placeSelected}){
- const[current,setCurrent]=useState(e);const[refreshing,setRefreshing]=useState(false);const[tab,setTab]=useState("all");
- useEffect(()=>setCurrent(e),[e]);
- useEffect(()=>{if(!e?.sport_key)return;const id=setInterval(async()=>{setRefreshing(true);try{const r=await fetch("/api/odds/"+encodeURIComponent(e.sport_key)+"?regions=eu&markets=h2h,h2h_lay,spreads,totals");if(r.ok){const a=await r.json();const n=a.find(x=>x.id===e.id);if(n)setCurrent({...n,sport_key:e.sport_key})}}finally{setRefreshing(false)}},20000);return()=>clearInterval(id)},[e?.id,e?.sport_key]);
+function Match({e:initialEvent,back,chooseBet,selected,updateSelected,placeSelected}){
+ const[current,setCurrent]=useState(initialEvent);const[refreshing,setRefreshing]=useState(false);const[tab,setTab]=useState("all");
+ useEffect(()=>setCurrent(initialEvent),[initialEvent]);
+ useEffect(()=>{if(!initialEvent?.sport_key)return;const id=setInterval(async()=>{setRefreshing(true);try{const r=await fetch("/api/odds/"+encodeURIComponent(initialEvent.sport_key)+"?regions=eu&markets=h2h,h2h_lay,spreads,totals");if(r.ok){const a=await r.json();const n=a.find(x=>x.id===initialEvent.id);if(n)setCurrent({...n,sport_key:initialEvent.sport_key})}}finally{setRefreshing(false)}},20000);return()=>clearInterval(id)},[initialEvent?.id,initialEvent?.sport_key]);
  if(!current)return <div className="page"><div className="empty">Select a match to view markets.</div></div>;
  const e=current;
  const markets=e.bookmakers?.flatMap(b=>b.markets||[])||[];const h2h=markets.find(x=>x.key==="h2h");const layM=markets.find(x=>x.key==="h2h_lay");const os=h2h?.outcomes||[];const live=isLive(e);
