@@ -6,14 +6,12 @@ const SPORTS = [
   ["cricket", "🏏", "Cricket"],
   ["soccer", "⚽", "Football"],
   ["tennis", "🎾", "Tennis"],
-  ["basketball", "🏀", "Basketball"]
+  ["basketball", "🏀", "Basketball"],
 ];
-
-const COIN_REQUEST_AMOUNTS = [300, 500, 1000, 2000, 5000];
 
 const fmt = (n) =>
   Number(n || 0).toLocaleString("en-IN", {
-    maximumFractionDigits: 2
+    maximumFractionDigits: 2,
   });
 
 function toDate(value) {
@@ -27,18 +25,24 @@ function toDate(value) {
 
   const raw = String(value).trim();
 
-  if (/^\d+$/.test(raw)) return toDate(Number(raw));
+  if (/^\d+$/.test(raw)) {
+    return toDate(Number(raw));
+  }
 
   let d = new Date(raw);
 
-  if (!Number.isNaN(d.getTime())) return d;
+  if (!Number.isNaN(d.getTime())) {
+    return d;
+  }
 
   if (
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(raw)
   ) {
     d = new Date(`${raw}Z`);
 
-    if (!Number.isNaN(d.getTime())) return d;
+    if (!Number.isNaN(d.getTime())) {
+      return d;
+    }
   }
 
   return null;
@@ -87,7 +91,7 @@ function formatMatchTime(e) {
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-    hour12: true
+    hour12: true,
   }).format(d);
 }
 
@@ -106,38 +110,45 @@ function formatShortTime(e) {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-    hour12: true
+    hour12: true,
   }).format(d);
 }
 
 /*
-  NOVA PLAY odds rule:
+  MATCH ODDS LAY RULE
 
-  Back < 5.00
-      Lay = Back × 1.02
+  Back < 5.00:
+    Lay = Back + 2%
 
-  Back >= 5.00
-      Lay = Back + 1.00
+  Back >= 5.00:
+    Lay = Back + 1.00
 */
 function makeLayPrice(back) {
   const o = Number(back);
 
-  if (!Number.isFinite(o) || o <= 1) return null;
+  if (!Number.isFinite(o) || o <= 1) {
+    return null;
+  }
 
-  return o < 5
-    ? Number((o * 1.02).toFixed(2))
-    : Number((o + 1).toFixed(2));
+  if (o < 5) {
+    return Number((o * 1.02).toFixed(2));
+  }
+
+  return Number((o + 1).toFixed(2));
 }
 
 /*
-  Bookmaker:
-  Decimal odds -> rupee profit on 100 base
-  Then reduce by 2%.
+  BOOKMAKER RULE
+
+  Decimal odds converted to 100-coin profit value,
+  then reduced by 2%.
 */
 function bookmakerValue(decimalOdds) {
   const o = Number(decimalOdds);
 
-  if (!Number.isFinite(o) || o <= 1) return 0;
+  if (!Number.isFinite(o) || o <= 1) {
+    return 0;
+  }
 
   return Number(
     (((o - 1) * 100) * 0.98).toFixed(2)
@@ -148,67 +159,62 @@ function calc(side, odds, stake) {
   const s = Math.max(0, Number(stake) || 0);
   const o = Math.max(1.01, Number(odds) || 1.01);
 
-  return side === "lay"
-    ? {
-        profit: s,
-        liability: s * (o - 1)
-      }
-    : {
-        profit: s * (o - 1),
-        liability: s
-      };
+  if (side === "lay") {
+    return {
+      profit: s,
+      liability: s * (o - 1),
+    };
+  }
+
+  return {
+    profit: s * (o - 1),
+    liability: s,
+  };
 }
 
-function makeId(prefix = "REQ") {
-  return `${prefix}-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 7)
-    .toUpperCase()}`;
-}
-
-function readLocalArray(key) {
+function safeJson(key, fallback) {
   try {
-    const value = JSON.parse(
-      localStorage.getItem(key) || "[]"
-    );
+    const value = localStorage.getItem(key);
 
-    return Array.isArray(value) ? value : [];
+    if (!value) {
+      return fallback;
+    }
+
+    return JSON.parse(value);
   } catch {
-    return [];
+    return fallback;
   }
 }
 
 function App() {
   const [page, setPage] = useState("home");
-
   const [sport, setSport] = useState("cricket");
   const [events, setEvents] = useState([]);
   const [match, setMatch] = useState(null);
-
   const [selected, setSelected] = useState(null);
-  const [slip, setSlip] = useState([]);
+
+  const [slip, setSlip] = useState(() =>
+    safeJson("novaSlip", [])
+  );
 
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
-
   const [status, setStatus] = useState("loading");
   const [toast, setToast] = useState("");
 
-  /*
-    IMPORTANT:
-    novaCoinsV2 starts from 0.
-    This prevents the previous 10,000 demo balance
-    from being reused.
-  */
-  const [coins, setCoins] = useState(() => {
-    const saved = localStorage.getItem("novaCoinsV2");
+  const [coins, setCoins] = useState(() =>
+    Number(localStorage.getItem("novaCoinsV2") || 0)
+  );
 
-    if (saved === null) return 0;
+  const [requests, setRequests] = useState(() =>
+    safeJson("novaCoinRequests", [])
+  );
 
-    const n = Number(saved);
+  const [redeems, setRedeems] = useState(() =>
+    safeJson("novaRedeemRequests", [])
+  );
 
-    return Number.isFinite(n) ? Math.max(0, n) : 0;
-  });
+  const [adminOpen, setAdminOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(
@@ -218,9 +224,32 @@ function App() {
   }, [coins]);
 
   useEffect(() => {
+    localStorage.setItem(
+      "novaSlip",
+      JSON.stringify(slip)
+    );
+  }, [slip]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "novaCoinRequests",
+      JSON.stringify(requests)
+    );
+  }, [requests]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "novaRedeemRequests",
+      JSON.stringify(redeems)
+    );
+  }, [redeems]);
+
+  useEffect(() => {
     loadOdds();
 
-    const id = setInterval(loadOdds, 60000);
+    const id = setInterval(() => {
+      loadOdds();
+    }, 60000);
 
     return () => clearInterval(id);
   }, [sport]);
@@ -242,7 +271,7 @@ function App() {
       const r = await fetch(
         `/api/odds/${encodeURIComponent(sport)}`,
         {
-          cache: "no-store"
+          cache: "no-store",
         }
       );
 
@@ -252,7 +281,9 @@ function App() {
 
       const data = await r.json();
 
-      const list = Array.isArray(data) ? data : [];
+      const list = Array.isArray(data)
+        ? data
+        : [];
 
       list.sort((a, b) => {
         const al = eventIsLive(a);
@@ -280,7 +311,9 @@ function App() {
 
       setEvents([]);
       setStatus("error");
-      setToast("Unable to load provider matches");
+      setToast(
+        "Unable to load provider matches"
+      );
     }
   }
 
@@ -305,7 +338,7 @@ function App() {
       side,
       market,
       stake: 100,
-      editingStake: false
+      editingStake: false,
     });
   }
 
@@ -323,7 +356,8 @@ function App() {
   function placeBet() {
     if (!selected) return;
 
-    const stake = Number(selected.stake) || 0;
+    const stake =
+      Number(selected.stake) || 0;
 
     if (stake < 1) {
       setToast("Enter a valid stake");
@@ -331,7 +365,7 @@ function App() {
     }
 
     if (stake > coins) {
-      setToast("Not enough coins");
+      setToast("Not enough virtual coins");
       return;
     }
 
@@ -347,22 +381,198 @@ function App() {
             x.side === selected.side
           )
       ),
-      { ...selected }
+      {
+        ...selected,
+      },
     ]);
 
-    setToast("Bet added to Slip");
+    setToast(
+      "Virtual bet added to Slip"
+    );
+
     setSelected(null);
   }
 
+  function requestCoins(amount) {
+    const value = Number(amount);
+
+    if (!Number.isFinite(value) || value <= 0) {
+      return;
+    }
+
+    setRequests((items) => [
+      ...items,
+      {
+        id: `${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2)}`,
+        amount: value,
+        status: "PENDING",
+        requestedAt:
+          new Date().toISOString(),
+      },
+    ]);
+
+    setToast(
+      `Requested ${fmt(
+        value
+      )} virtual coins`
+    );
+  }
+
+  function requestRedeem(amount) {
+    const value = Number(amount);
+
+    if (!Number.isFinite(value) || value <= 0) {
+      return;
+    }
+
+    if (value > coins) {
+      setToast(
+        "Not enough virtual coins"
+      );
+      return;
+    }
+
+    setRedeems((items) => [
+      ...items,
+      {
+        id: `${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2)}`,
+        amount: value,
+        status: "PENDING",
+        requestedAt:
+          new Date().toISOString(),
+      },
+    ]);
+
+    setToast(
+      `Redeem request created for ${fmt(
+        value
+      )} virtual coins`
+    );
+  }
+
+  function approveCoin(id) {
+    const req = requests.find(
+      (r) => r.id === id
+    );
+
+    if (!req || req.status !== "PENDING") {
+      return;
+    }
+
+    setRequests((items) =>
+      items.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              status: "APPROVED",
+              approvedAt:
+                new Date().toISOString(),
+            }
+          : r
+      )
+    );
+
+    setCoins(
+      (c) => c + Number(req.amount || 0)
+    );
+
+    setToast(
+      "Virtual coins approved"
+    );
+  }
+
+  function rejectCoin(id) {
+    setRequests((items) =>
+      items.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              status: "REJECTED",
+              rejectedAt:
+                new Date().toISOString(),
+            }
+          : r
+      )
+    );
+
+    setToast(
+      "Coin request rejected"
+    );
+  }
+
+  function approveRedeem(id) {
+    const req = redeems.find(
+      (r) => r.id === id
+    );
+
+    if (!req || req.status !== "PENDING") {
+      return;
+    }
+
+    const amount = Number(req.amount || 0);
+
+    if (amount > coins) {
+      setToast(
+        "User balance is too low"
+      );
+      return;
+    }
+
+    setCoins((c) => c - amount);
+
+    setRedeems((items) =>
+      items.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              status: "APPROVED",
+              approvedAt:
+                new Date().toISOString(),
+            }
+          : r
+      )
+    );
+
+    setToast(
+      "Virtual redeem approved"
+    );
+  }
+
+  function rejectRedeem(id) {
+    setRedeems((items) =>
+      items.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              status: "REJECTED",
+              rejectedAt:
+                new Date().toISOString(),
+            }
+          : r
+      )
+    );
+
+    setToast(
+      "Redeem request rejected"
+    );
+  }
+
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search
+      .trim()
+      .toLowerCase();
 
     return events.filter((e) => {
-      const text = `
-        ${e.home_team || ""}
-        ${e.away_team || ""}
-        ${e.competition?.name || ""}
-      `.toLowerCase();
+      const text =
+        `${e.home_team || ""} ${
+          e.away_team || ""
+        } ${
+          e.competition?.name || ""
+        }`.toLowerCase();
 
       if (q && !text.includes(q)) {
         return false;
@@ -380,18 +590,32 @@ function App() {
     });
   }, [events, search, filter]);
 
-  const live = filtered.filter(eventIsLive);
+  const live = filtered.filter(
+    eventIsLive
+  );
 
   const upcoming = filtered.filter(
     (e) => !eventIsLive(e)
   );
+
+  const pendingCoins =
+    requests.filter(
+      (r) => r.status === "PENDING"
+    ).length;
+
+  const pendingRedeems =
+    redeems.filter(
+      (r) => r.status === "PENDING"
+    ).length;
 
   return (
     <>
       <header>
         <button
           className="logo"
-          onClick={() => setPage("home")}
+          onClick={() =>
+            setPage("home")
+          }
         >
           <b>N</b>
           <span className="brandText">
@@ -403,7 +627,9 @@ function App() {
           <button
             onClick={() =>
               document
-                .getElementById("eventSearch")
+                .getElementById(
+                  "eventSearch"
+                )
                 ?.focus()
             }
           >
@@ -411,12 +637,44 @@ function App() {
           </button>
 
           <button
-            onClick={() => setPage("wallet")}
+            onClick={() =>
+              setPage("wallet")
+            }
           >
             🪙 {fmt(coins)}
           </button>
+
+          <button
+            onClick={() =>
+              setAdminOpen(
+                (v) => !v
+              )
+            }
+          >
+            ⚙
+          </button>
         </div>
       </header>
+
+      {adminOpen && (
+        <AdminPanel
+          requests={requests}
+          redeems={redeems}
+          approveCoin={approveCoin}
+          rejectCoin={rejectCoin}
+          approveRedeem={approveRedeem}
+          rejectRedeem={rejectRedeem}
+          close={() =>
+            setAdminOpen(false)
+          }
+          pendingCoins={
+            pendingCoins
+          }
+          pendingRedeems={
+            pendingRedeems
+          }
+        />
+      )}
 
       <main>
         {page === "home" && (
@@ -443,16 +701,21 @@ function App() {
           />
         )}
 
-        {page === "match" && match && (
-          <Match
-            initialEvent={match}
-            back={() => setPage("home")}
-            selected={selected}
-            chooseBet={chooseBet}
-            updateSelected={updateSelected}
-            placeBet={placeBet}
-          />
-        )}
+        {page === "match" &&
+          match && (
+            <Match
+              initialEvent={match}
+              back={() =>
+                setPage("home")
+              }
+              selected={selected}
+              chooseBet={chooseBet}
+              updateSelected={
+                updateSelected
+              }
+              placeBet={placeBet}
+            />
+          )}
 
         {page === "slip" && (
           <Slip
@@ -464,53 +727,76 @@ function App() {
         {page === "wallet" && (
           <Wallet
             coins={coins}
-            setPage={setPage}
+            requests={requests}
+            redeems={redeems}
+            requestCoins={
+              requestCoins
+            }
+            requestRedeem={
+              requestRedeem
+            }
           />
         )}
 
-        {page === "admin" && (
-          <Admin
-            coins={coins}
-            setCoins={setCoins}
-            back={() => setPage("wallet")}
-          />
+        {page === "games" && (
+          <Games />
         )}
-
-        {page === "games" && <Games />}
       </main>
 
       <nav>
-        <button onClick={() => setPage("home")}>
+        <button
+          onClick={() =>
+            setPage("home")
+          }
+        >
           ⌂
           <small>Home</small>
         </button>
 
-        <button onClick={() => setPage("sports")}>
+        <button
+          onClick={() =>
+            setPage("sports")
+          }
+        >
           ◈
           <small>Sports</small>
         </button>
 
         <button
           className="center"
-          onClick={() => setPage("slip")}
+          onClick={() =>
+            setPage("slip")
+          }
         >
           ▱
           <i>{slip.length}</i>
           <small>Slip</small>
         </button>
 
-        <button onClick={() => setPage("games")}>
+        <button
+          onClick={() =>
+            setPage("games")
+          }
+        >
           ◇
           <small>Games</small>
         </button>
 
-        <button onClick={() => setPage("wallet")}>
+        <button
+          onClick={() =>
+            setPage("wallet")
+          }
+        >
           ♙
           <small>Coins</small>
         </button>
       </nav>
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast && (
+        <div className="toast">
+          {toast}
+        </div>
+      )}
     </>
   );
 }
@@ -525,26 +811,31 @@ function Home({
   live,
   upcoming,
   openMatch,
-  status
+  status,
 }) {
   return (
     <div className="page homePage">
       <section className="hero">
         <div>
           <div className="livePill">
-            <i /> SPORTS
+            <i /> VIRTUAL SPORTS
           </div>
 
-          <small>WELCOME TO NOVA PLAY</small>
+          <small>
+            WELCOME TO NOVA PLAY
+          </small>
 
           <h1>
             Live sports.
             <br />
-            <em>Exchange markets.</em>
+            <em>
+              Exchange markets.
+            </em>
           </h1>
 
           <p>
-            Live and upcoming matches with
+            Live and upcoming matches
+            with virtual-coin
             Back/Lay markets.
           </p>
 
@@ -553,9 +844,12 @@ function Home({
               className="primary"
               onClick={() =>
                 document
-                  .getElementById("matches")
+                  .getElementById(
+                    "matches"
+                  )
                   ?.scrollIntoView({
-                    behavior: "smooth"
+                    behavior:
+                      "smooth",
                   })
               }
             >
@@ -565,10 +859,7 @@ function Home({
             <button
               className="ghost"
               onClick={() =>
-                window.scrollTo({
-                  top: 0,
-                  behavior: "smooth"
-                })
+                loadPageRefresh()
               }
             >
               Refresh
@@ -578,7 +869,11 @@ function Home({
 
         <div className="orb">
           🪙
-          <small>COINS</small>
+          <small>
+            VIRTUAL
+            <br />
+            ONLY
+          </small>
         </div>
       </section>
 
@@ -607,7 +902,9 @@ function Home({
           placeholder="Search teams, players or leagues"
           value={search}
           onChange={(e) =>
-            setSearch(e.target.value)
+            setSearch(
+              e.target.value
+            )
           }
         />
       </div>
@@ -633,18 +930,27 @@ function Home({
         {[
           ["all", "All"],
           ["live", "● Live"],
-          ["upcoming", "Upcoming"]
-        ].map(([k, label]) => (
-          <button
-            key={k}
-            className={
-              filter === k ? "active" : ""
-            }
-            onClick={() => setFilter(k)}
-          >
-            {label}
-          </button>
-        ))}
+          [
+            "upcoming",
+            "Upcoming",
+          ],
+        ].map(
+          ([k, label]) => (
+            <button
+              key={k}
+              className={
+                filter === k
+                  ? "active"
+                  : ""
+              }
+              onClick={() =>
+                setFilter(k)
+              }
+            >
+              {label}
+            </button>
+          )
+        )}
       </div>
 
       <div id="matches">
@@ -654,61 +960,95 @@ function Home({
             <div className="sectionLine">
               <h2>
                 🔴 Live Matches{" "}
-                <small>{live.length}</small>
+                <small>
+                  {live.length}
+                </small>
               </h2>
             </div>
 
             {live.length ? (
               <Events
                 events={live}
-                openMatch={openMatch}
+                openMatch={
+                  openMatch
+                }
               />
             ) : (
               <div className="empty">
-                No live matches right now.
+                No live matches
+                right now.
               </div>
             )}
           </section>
         )}
 
         {(filter === "all" ||
-          filter === "upcoming") && (
+          filter ===
+            "upcoming") && (
           <section className="eventSection">
             <div className="sectionLine">
               <h2>
                 Upcoming Matches{" "}
-                <small>{upcoming.length}</small>
+                <small>
+                  {
+                    upcoming.length
+                  }
+                </small>
               </h2>
             </div>
 
             {upcoming.length ? (
               <Events
                 events={upcoming}
-                openMatch={openMatch}
+                openMatch={
+                  openMatch
+                }
               />
             ) : (
               <div className="empty">
-                No upcoming matches right now.
+                No upcoming
+                matches right now.
               </div>
             )}
           </section>
         )}
       </div>
+
+      <div className="note">
+        🛡️ Virtual coins only ·
+        No cash value · Odds
+        refresh automatically.
+      </div>
     </div>
   );
 }
 
-function Rail({ sport, setSport }) {
+function loadPageRefresh() {
+  window.location.reload();
+}
+
+function Rail({
+  sport,
+  setSport,
+}) {
   return (
     <div className="rail">
       {SPORTS.map(
-        ([key, icon, name]) => (
+        ([
+          key,
+          icon,
+          name,
+        ]) => (
           <button
             key={key}
             className={
-              sport === key ? "sel" : ""
+              sport === key
+                ? "sel"
+                : ""
             }
-            onClick={() => setSport(key)}
+            onClick={() =>
+              setSport(key)
+            }
           >
             {icon} {name}
           </button>
@@ -718,14 +1058,19 @@ function Rail({ sport, setSport }) {
   );
 }
 
-function Events({ events, openMatch }) {
+function Events({
+  events,
+  openMatch,
+}) {
   return (
     <div className="events">
       {events.map((e) => (
         <EventCard
           key={e.id}
           e={e}
-          openMatch={openMatch}
+          openMatch={
+            openMatch
+          }
         />
       ))}
     </div>
@@ -743,12 +1088,13 @@ function getMatchOdds(e) {
   );
 
   const lay = markets.filter(
-    (m) => m.key === "h2h_lay"
+    (m) =>
+      m.key === "h2h_lay"
   );
 
   const names = [
     e.home_team,
-    e.away_team
+    e.away_team,
   ].filter(Boolean);
 
   return names
@@ -757,60 +1103,86 @@ function getMatchOdds(e) {
         .flatMap((m) =>
           (m.outcomes || [])
             .filter(
-              (o) => o.name === name
+              (o) =>
+                o.name === name
             )
-            .map((o) => Number(o.price))
-        )
-        .filter(Number.isFinite);
-
-      if (!backs.length) return null;
-
-      const back = Math.max(...backs);
-
-      const providerLays = lay
-        .flatMap((m) =>
-          (m.outcomes || [])
-            .filter(
-              (o) => o.name === name
+            .map((o) =>
+              Number(o.price)
             )
-            .map((o) => Number(o.price))
         )
-        .filter(Number.isFinite);
+        .filter(
+          Number.isFinite
+        );
 
-      /*
-        We use the provider Lay if present.
-        Otherwise use NOVA PLAY calculation.
-      */
+      if (!backs.length) {
+        return null;
+      }
+
+      const back =
+        Math.max(...backs);
+
+      const providerLays =
+        lay
+          .flatMap((m) =>
+            (m.outcomes || [])
+              .filter(
+                (o) =>
+                  o.name === name
+              )
+              .map((o) =>
+                Number(o.price)
+              )
+          )
+          .filter(
+            Number.isFinite
+          );
+
       const layPrice =
         providerLays.length
-          ? Math.min(...providerLays)
-          : makeLayPrice(back);
+          ? Math.min(
+              ...providerLays
+            )
+          : makeLayPrice(
+              back
+            );
 
       return {
         name,
         back,
-        lay: layPrice
+        lay: layPrice,
       };
     })
     .filter(Boolean);
 }
 
-function EventCard({ e, openMatch }) {
-  const os = getMatchOdds(e);
-  const live = eventIsLive(e);
+function EventCard({
+  e,
+  openMatch,
+}) {
+  const os =
+    getMatchOdds(e);
+
+  const live =
+    eventIsLive(e);
 
   return (
     <article
       className="eventCard"
-      onClick={() => openMatch(e)}
+      onClick={() =>
+        openMatch(e)
+      }
     >
       <div className="meta">
         <span
           className={
-            live ? "liveBadge" : "upBadge"
+            live
+              ? "liveBadge"
+              : "upBadge"
           }
         >
-          {live ? "● LIVE" : "UPCOMING"}
+          {live
+            ? "● LIVE"
+            : "UPCOMING"}
         </span>
 
         <span>
@@ -822,8 +1194,12 @@ function EventCard({ e, openMatch }) {
 
       <div className="eventTitle">
         <div>
-          <b>{e.home_team}</b>
-          <b>{e.away_team}</b>
+          <b>
+            {e.home_team}
+          </b>
+          <b>
+            {e.away_team}
+          </b>
         </div>
 
         <time>
@@ -833,7 +1209,9 @@ function EventCard({ e, openMatch }) {
 
       <div className="miniMarket">
         <div className="miniHead">
-          <span>Match Odds</span>
+          <span>
+            Match Odds
+          </span>
           <b>BACK</b>
           <b>LAY</b>
         </div>
@@ -843,19 +1221,25 @@ function EventCard({ e, openMatch }) {
             className="miniRow"
             key={o.name}
           >
-            <span title={o.name}>
+            <span
+              title={o.name}
+            >
               {o.name}
             </span>
 
             <div className="backBox">
               <strong>
-                {o.back.toFixed(2)}
+                {o.back.toFixed(
+                  2
+                )}
               </strong>
             </div>
 
             <div className="layBox">
               <strong>
-                {o.lay.toFixed(2)}
+                {Number(
+                  o.lay
+                ).toFixed(2)}
               </strong>
             </div>
           </div>
@@ -872,10 +1256,14 @@ function EventCard({ e, openMatch }) {
         <span>
           {live
             ? "Live market"
-            : `Starts ${formatShortTime(e)}`}
+            : `Starts ${formatShortTime(
+                e
+              )}`}
         </span>
 
-        <span>Open match →</span>
+        <span>
+          Open match →
+        </span>
       </footer>
     </article>
   );
@@ -885,14 +1273,18 @@ function Sports({
   sport,
   setSport,
   events,
-  openMatch
+  openMatch,
 }) {
   return (
     <div className="page">
       <div className="title">
         <div>
-          <small>SPORTS HUB</small>
-          <h1>All matches</h1>
+          <small>
+            SPORTS HUB
+          </small>
+          <h1>
+            All matches
+          </h1>
         </div>
       </div>
 
@@ -903,7 +1295,9 @@ function Sports({
 
       <Events
         events={events}
-        openMatch={openMatch}
+        openMatch={
+          openMatch
+        }
       />
     </div>
   );
@@ -915,7 +1309,7 @@ function Match({
   selected,
   chooseBet,
   updateSelected,
-  placeBet
+  placeBet,
 }) {
   const [current, setCurrent] =
     useState(initialEvent);
@@ -931,54 +1325,73 @@ function Match({
   }, [initialEvent]);
 
   useEffect(() => {
-    if (!initialEvent?.sport) return;
+    if (!initialEvent?.sport) {
+      return;
+    }
 
     let cancelled = false;
 
-    const refresh = async () => {
-      setRefreshing(true);
+    const refresh =
+      async () => {
+        setRefreshing(true);
 
-      try {
-        const r = await fetch(
-          `/api/odds/${encodeURIComponent(
-            initialEvent.sport
-          )}`,
-          {
-            cache: "no-store"
+        try {
+          const r =
+            await fetch(
+              `/api/odds/${encodeURIComponent(
+                initialEvent.sport
+              )}`,
+              {
+                cache:
+                  "no-store",
+              }
+            );
+
+          if (!r.ok) {
+            return;
           }
-        );
 
-        if (!r.ok) return;
+          const data =
+            await r.json();
 
-        const data = await r.json();
+          const n =
+            Array.isArray(data)
+              ? data.find(
+                  (x) =>
+                    String(
+                      x.id
+                    ) ===
+                    String(
+                      initialEvent.id
+                    )
+                )
+              : null;
 
-        const n = Array.isArray(data)
-          ? data.find(
-              (x) =>
-                String(x.id) ===
-                String(initialEvent.id)
-            )
-          : null;
-
-        if (n && !cancelled) {
-          setCurrent(n);
+          if (
+            n &&
+            !cancelled
+          ) {
+            setCurrent(n);
+          }
+        } catch (err) {
+          console.warn(
+            "Match refresh failed",
+            err
+          );
+        } finally {
+          if (!cancelled) {
+            setRefreshing(
+              false
+            );
+          }
         }
-      } catch (err) {
-        console.warn(
-          "Match refresh failed",
-          err
-        );
-      } finally {
-        if (!cancelled) {
-          setRefreshing(false);
-        }
-      }
-    };
+      };
 
-    const id = setInterval(
-      refresh,
-      30000
-    );
+    const id =
+      setInterval(
+        refresh,
+        30000
+      );
 
     return () => {
       cancelled = true;
@@ -986,7 +1399,7 @@ function Match({
     };
   }, [
     initialEvent?.id,
-    initialEvent?.sport
+    initialEvent?.sport,
   ]);
 
   if (!current) {
@@ -1000,8 +1413,12 @@ function Match({
   }
 
   const e = current;
-  const os = getMatchOdds(e);
-  const live = eventIsLive(e);
+
+  const os =
+    getMatchOdds(e);
+
+  const live =
+    eventIsLive(e);
 
   return (
     <div className="page matchPage">
@@ -1014,10 +1431,15 @@ function Match({
 
       <section className="match">
         <div className="liveState">
-          {live ? "● LIVE" : "UPCOMING"}
+          {live
+            ? "● LIVE"
+            : "UPCOMING"}
 
           {refreshing && (
-            <span> · updating…</span>
+            <span>
+              {" "}
+              · updating…
+            </span>
           )}
         </div>
 
@@ -1029,31 +1451,56 @@ function Match({
         </small>
 
         <div className="matchTeams">
-          <h1>{e.home_team}</h1>
-          <strong>VS</strong>
-          <h1>{e.away_team}</h1>
+          <h1>
+            {e.home_team}
+          </h1>
+
+          <strong>
+            VS
+          </strong>
+
+          <h1>
+            {e.away_team}
+          </h1>
         </div>
 
-        <p>{formatMatchTime(e)}</p>
+        <p>
+          {formatMatchTime(e)}
+        </p>
       </section>
 
       <div className="marketTabs topTabs">
         {[
           ["all", "All"],
-          ["match", "Match Odds"],
-          ["book", "Bookmaker"],
-          ["fancy", "Fancy"]
-        ].map(([k, label]) => (
-          <button
-            key={k}
-            className={
-              tab === k ? "active" : ""
-            }
-            onClick={() => setTab(k)}
-          >
-            {label}
-          </button>
-        ))}
+          [
+            "match",
+            "Match Odds",
+          ],
+          [
+            "book",
+            "Bookmaker",
+          ],
+          [
+            "fancy",
+            "Fancy",
+          ],
+        ].map(
+          ([k, label]) => (
+            <button
+              key={k}
+              className={
+                tab === k
+                  ? "active"
+                  : ""
+              }
+              onClick={() =>
+                setTab(k)
+              }
+            >
+              {label}
+            </button>
+          )
+        )}
       </div>
 
       {(tab === "all" ||
@@ -1062,11 +1509,15 @@ function Match({
           e={e}
           outcomes={os}
           selected={selected}
-          chooseBet={chooseBet}
+          chooseBet={
+            chooseBet
+          }
           updateSelected={
             updateSelected
           }
-          placeBet={placeBet}
+          placeBet={
+            placeBet
+          }
         />
       )}
 
@@ -1075,7 +1526,9 @@ function Match({
         <SuperOverSection
           e={e}
           outcomes={os}
-          chooseBet={chooseBet}
+          chooseBet={
+            chooseBet
+          }
         />
       )}
 
@@ -1085,20 +1538,32 @@ function Match({
           e={e}
           outcomes={os}
           selected={selected}
-          chooseBet={chooseBet}
+          chooseBet={
+            chooseBet
+          }
           updateSelected={
             updateSelected
           }
-          placeBet={placeBet}
+          placeBet={
+            placeBet
+          }
         />
       )}
 
       {tab === "fancy" && (
         <div className="empty">
-          Fancy market is not available
-          in the current provider feed.
+          Fancy market is not
+          available in the
+          current provider
+          feed.
         </div>
       )}
+
+      <div className="note">
+        All stakes, profits and
+        balances shown here are
+        virtual coins only.
+      </div>
     </div>
   );
 }
@@ -1109,21 +1574,27 @@ function MatchOddsSection({
   selected,
   chooseBet,
   updateSelected,
-  placeBet
+  placeBet,
 }) {
   return (
     <section className="marketBlock">
-      <MarketHeader title="Match Odds" />
+      <MarketHeader
+        title="Match Odds"
+      />
 
       <div className="exchangeTable">
         <div className="tableHead">
-          <span>Selection</span>
+          <span>
+            Selection
+          </span>
           <b>BACK</b>
           <b>LAY</b>
         </div>
 
         {outcomes.map((o) => (
-          <React.Fragment key={o.name}>
+          <React.Fragment
+            key={o.name}
+          >
             <div className="matchRunner">
               <span>
                 <strong>
@@ -1144,7 +1615,9 @@ function MatchOddsSection({
                 }
               >
                 <strong>
-                  {o.back.toFixed(2)}
+                  {o.back.toFixed(
+                    2
+                  )}
                 </strong>
               </button>
 
@@ -1161,22 +1634,29 @@ function MatchOddsSection({
                 }
               >
                 <strong>
-                  {o.lay.toFixed(2)}
+                  {Number(
+                    o.lay
+                  ).toFixed(2)}
                 </strong>
               </button>
             </div>
 
-            {selected?.eventId === e.id &&
+            {selected?.eventId ===
+              e.id &&
               selected?.selection ===
                 o.name &&
               selected?.market ===
                 "match_odds" && (
                 <BetPanel
-                  selected={selected}
+                  selected={
+                    selected
+                  }
                   update={
                     updateSelected
                   }
-                  place={placeBet}
+                  place={
+                    placeBet
+                  }
                 />
               )}
           </React.Fragment>
@@ -1195,7 +1675,7 @@ function MatchOddsSection({
 function SuperOverSection({
   e,
   outcomes,
-  chooseBet
+  chooseBet,
 }) {
   return (
     <section className="marketBlock">
@@ -1206,25 +1686,32 @@ function SuperOverSection({
 
       {outcomes.length ? (
         <div className="superGrid">
-          {outcomes.map((o) => (
-            <button
-              key={o.name}
-              onClick={() =>
-                chooseBet(
-                  e,
-                  o.name,
-                  o.back,
-                  "back",
-                  "super_over"
-                )
-              }
-            >
-              <span>{o.name}</span>
-              <strong>
-                {o.back.toFixed(2)}
-              </strong>
-            </button>
-          ))}
+          {outcomes.map(
+            (o) => (
+              <button
+                key={o.name}
+                onClick={() =>
+                  chooseBet(
+                    e,
+                    o.name,
+                    o.back,
+                    "back",
+                    "super_over"
+                  )
+                }
+              >
+                <span>
+                  {o.name}
+                </span>
+
+                <strong>
+                  {o.back.toFixed(
+                    2
+                  )}
+                </strong>
+              </button>
+            )
+          )}
         </div>
       ) : (
         <div className="suspended">
@@ -1241,25 +1728,33 @@ function BookmakerSection({
   selected,
   chooseBet,
   updateSelected,
-  placeBet
+  placeBet,
 }) {
   return (
     <section className="marketBlock">
-      <MarketHeader title="Bookmaker" />
+      <MarketHeader
+        title="Bookmaker"
+      />
 
       <div className="exchangeTable">
         <div className="tableHead">
-          <span>Selection</span>
+          <span>
+            Selection
+          </span>
           <b>BACK</b>
           <b>LAY</b>
         </div>
 
         {outcomes.map((o) => {
           const back =
-            bookmakerValue(o.back);
+            bookmakerValue(
+              o.back
+            );
 
           const lay =
-            bookmakerValue(o.lay);
+            bookmakerValue(
+              o.lay
+            );
 
           return (
             <React.Fragment
@@ -1280,7 +1775,9 @@ function BookmakerSection({
                       o.name,
                       Math.max(
                         1.01,
-                        1 + back / 100
+                        1 +
+                          back /
+                            100
                       ),
                       "back",
                       "bookmaker"
@@ -1288,7 +1785,10 @@ function BookmakerSection({
                   }
                 >
                   <strong>
-                    ₹{back.toFixed(2)}
+                    ₹
+                    {back.toFixed(
+                      2
+                    )}
                   </strong>
                 </button>
 
@@ -1300,7 +1800,9 @@ function BookmakerSection({
                       o.name,
                       Math.max(
                         1.01,
-                        1 + lay / 100
+                        1 +
+                          lay /
+                            100
                       ),
                       "lay",
                       "bookmaker"
@@ -1308,22 +1810,30 @@ function BookmakerSection({
                   }
                 >
                   <strong>
-                    ₹{lay.toFixed(2)}
+                    ₹
+                    {lay.toFixed(
+                      2
+                    )}
                   </strong>
                 </button>
               </div>
 
-              {selected?.eventId === e.id &&
+              {selected?.eventId ===
+                e.id &&
                 selected?.selection ===
                   o.name &&
                 selected?.market ===
                   "bookmaker" && (
                   <BetPanel
-                    selected={selected}
+                    selected={
+                      selected
+                    }
                     update={
                       updateSelected
                     }
-                    place={placeBet}
+                    place={
+                      placeBet
+                    }
                   />
                 )}
             </React.Fragment>
@@ -1342,7 +1852,7 @@ function BookmakerSection({
 
 function MarketHeader({
   title,
-  subtitle
+  subtitle,
 }) {
   return (
     <div className="marketHeader">
@@ -1350,7 +1860,9 @@ function MarketHeader({
         <b>{title}</b>
 
         {subtitle && (
-          <small>{subtitle}</small>
+          <small>
+            {subtitle}
+          </small>
         )}
       </div>
 
@@ -1364,7 +1876,7 @@ function MarketHeader({
 function BetPanel({
   selected,
   update,
-  place
+  place,
 }) {
   const c = calc(
     selected.side,
@@ -1378,7 +1890,7 @@ function BetPanel({
     500,
     1000,
     2000,
-    5000
+    5000,
   ];
 
   return (
@@ -1390,15 +1902,22 @@ function BetPanel({
     >
       <div className="betTop">
         <span
-          className={selected.side}
+          className={
+            selected.side
+          }
         >
           {selected.side.toUpperCase()}
         </span>
 
-        <b>{selected.selection}</b>
+        <b>
+          {selected.selection}
+        </b>
 
         <small>
-          @ {selected.odds.toFixed(2)}
+          @{" "}
+          {selected.odds.toFixed(
+            2
+          )}
         </small>
       </div>
 
@@ -1409,19 +1928,22 @@ function BetPanel({
           </small>
 
           <b>
-            +🪙{fmt(c.profit)}
+            +🪙
+            {fmt(c.profit)}
           </b>
         </div>
 
         <div>
           <small>
-            {selected.side === "lay"
+            {selected.side ===
+            "lay"
               ? "LIABILITY / LOSS"
               : "LOSS"}
           </small>
 
           <b>
-            -🪙{fmt(c.liability)}
+            -🪙
+            {fmt(c.liability)}
           </b>
         </div>
       </div>
@@ -1433,7 +1955,9 @@ function BetPanel({
 
         <i>●</i>
 
-        <strong>Coins</strong>
+        <strong>
+          Virtual coins
+        </strong>
       </div>
 
       <div className="stakeEdit">
@@ -1445,7 +1969,7 @@ function BetPanel({
                 Number(
                   selected.stake
                 ) - 100
-              )
+              ),
             })
           }
         >
@@ -1455,7 +1979,9 @@ function BetPanel({
         <input
           type="number"
           min="1"
-          value={selected.stake}
+          value={
+            selected.stake
+          }
           onChange={(e) =>
             update({
               stake: Math.max(
@@ -1463,7 +1989,7 @@ function BetPanel({
                 Number(
                   e.target.value
                 ) || 1
-              )
+              ),
             })
           }
         />
@@ -1474,7 +2000,7 @@ function BetPanel({
               stake:
                 Number(
                   selected.stake
-                ) + 100
+                ) + 100,
             })
           }
         >
@@ -1483,21 +2009,23 @@ function BetPanel({
       </div>
 
       <div className="quickMoney">
-        {quick.map((x) => (
-          <button
-            key={x}
-            onClick={() =>
-              update({
-                stake: x
-              })
-            }
-          >
-            🪙{" "}
-            {x.toLocaleString(
-              "en-IN"
-            )}
-          </button>
-        ))}
+        {quick.map(
+          (x) => (
+            <button
+              key={x}
+              onClick={() =>
+                update({
+                  stake: x,
+                })
+              }
+            >
+              🪙{" "}
+              {x.toLocaleString(
+                "en-IN"
+              )}
+            </button>
+          )
+        )}
       </div>
 
       {!selected.editingStake ? (
@@ -1505,7 +2033,8 @@ function BetPanel({
           className="editStakeButton"
           onClick={() =>
             update({
-              editingStake: true
+              editingStake:
+                true,
             })
           }
         >
@@ -1517,7 +2046,9 @@ function BetPanel({
             autoFocus
             type="number"
             min="1"
-            value={selected.stake}
+            value={
+              selected.stake
+            }
             onChange={(e) =>
               update({
                 stake: Math.max(
@@ -1525,7 +2056,7 @@ function BetPanel({
                   Number(
                     e.target.value
                   ) || 1
-                )
+                ),
               })
             }
           />
@@ -1533,7 +2064,8 @@ function BetPanel({
           <button
             onClick={() =>
               update({
-                editingStake: false
+                editingStake:
+                  false,
               })
             }
           >
@@ -1544,7 +2076,9 @@ function BetPanel({
 
       <div className="betActions">
         <button
-          onClick={() => update(null)}
+          onClick={() =>
+            update(null)
+          }
           className="cancel"
         >
           Cancel
@@ -1563,20 +2097,28 @@ function BetPanel({
 
 function Slip({
   items,
-  setSlip
+  setSlip,
 }) {
-  const total = items.reduce(
-    (a, x) =>
-      a + Number(x.stake || 0),
-    0
-  );
+  const total =
+    items.reduce(
+      (a, x) =>
+        a +
+        Number(
+          x.stake || 0
+        ),
+      0
+    );
 
   return (
     <div className="page">
       <div className="title">
         <div>
-          <small>YOUR PICKS</small>
-          <h1>Bet Slip</h1>
+          <small>
+            YOUR PICKS
+          </small>
+          <h1>
+            Bet Slip
+          </h1>
         </div>
 
         {items.length > 0 && (
@@ -1594,80 +2136,105 @@ function Slip({
         <div className="empty big">
           🧾
           <br />
-          <b>Slip is empty</b>
+          <b>
+            Slip is empty
+          </b>
           <small>
-            Tap a BACK or LAY price
-            on a match.
+            Tap a BACK or LAY
+            price on a match.
           </small>
         </div>
       ) : (
         <>
-          {items.map((x, i) => {
-            const c = calc(
-              x.side,
-              x.odds,
-              x.stake
-            );
+          {items.map(
+            (x, i) => {
+              const c =
+                calc(
+                  x.side,
+                  x.odds,
+                  x.stake
+                );
 
-            return (
-              <div
-                className="slip"
-                key={`${x.eventId}-${i}`}
-              >
-                <div>
-                  <span
-                    className={x.side}
-                  >
-                    {x.side.toUpperCase()}
-                  </span>
-
-                  <b>{x.selection}</b>
-
-                  <small>
-                    {x.eventName} ·{" "}
-                    {x.market}
-                  </small>
-
-                  <small>
-                    Stake 🪙{" "}
-                    {fmt(x.stake)}
-                    {" · "}
-                    Profit +🪙{" "}
-                    {fmt(c.profit)}
-                    {" · "}
-                    Liability 🪙{" "}
-                    {fmt(c.liability)}
-                  </small>
-                </div>
-
-                <button
-                  onClick={() =>
-                    setSlip((a) =>
-                      a.filter(
-                        (_, j) =>
-                          j !== i
-                      )
-                    )
-                  }
+              return (
+                <div
+                  className="slip"
+                  key={`${x.eventId}-${i}`}
                 >
-                  ×
-                </button>
-              </div>
-            );
-          })}
+                  <div>
+                    <span
+                      className={
+                        x.side
+                      }
+                    >
+                      {x.side.toUpperCase()}
+                    </span>
+
+                    <b>
+                      {x.selection}
+                    </b>
+
+                    <small>
+                      {
+                        x.eventName
+                      }{" "}
+                      ·{" "}
+                      {x.market}
+                    </small>
+
+                    <small>
+                      Stake 🪙{" "}
+                      {fmt(
+                        x.stake
+                      )}{" "}
+                      · Profit
+                      +🪙{" "}
+                      {fmt(
+                        c.profit
+                      )}{" "}
+                      · Liability
+                      🪙{" "}
+                      {fmt(
+                        c.liability
+                      )}
+                    </small>
+                  </div>
+
+                  <button
+                    onClick={() =>
+                      setSlip(
+                        (a) =>
+                          a.filter(
+                            (_, j) =>
+                              j !==
+                              i
+                          )
+                      )
+                    }
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            }
+          )}
 
           <section className="stake">
             <div>
-              <b>Total stake</b>
+              <b>
+                Total stake
+              </b>
 
               <strong>
-                🪙 {fmt(total)}
+                🪙{" "}
+                {fmt(total)}
               </strong>
             </div>
 
             <div className="note">
-              Coins have been reserved
-              from the balance.
+              Virtual bets are
+              already reserved
+              from the demo
+              balance.
             </div>
           </section>
         </>
@@ -1676,148 +2243,32 @@ function Slip({
   );
 }
 
-/* =========================================================
-   WALLET
-   ========================================================= */
-
 function Wallet({
   coins,
-  setPage
+  requests,
+  redeems,
+  requestCoins,
+  requestRedeem,
 }) {
-  const [requestAmount, setRequestAmount] =
-    useState(500);
-
-  const [redeemAmount, setRedeemAmount] =
-    useState("");
-
-  const [requests, setRequests] =
-    useState(() =>
-      readLocalArray(
-        "novaCoinRequests"
-      )
-    );
-
-  const [redeems, setRedeems] =
-    useState(() =>
-      readLocalArray(
-        "novaRedeemRequests"
-      )
-    );
-
-  const [message, setMessage] =
-    useState("");
-
-  useEffect(() => {
-    localStorage.setItem(
-      "novaCoinRequests",
-      JSON.stringify(requests)
-    );
-  }, [requests]);
-
-  useEffect(() => {
-    localStorage.setItem(
-      "novaRedeemRequests",
-      JSON.stringify(redeems)
-    );
-  }, [redeems]);
-
-  function requestCoins() {
-    const amount =
-      Number(requestAmount);
-
-    if (
-      !COIN_REQUEST_AMOUNTS.includes(
-        amount
-      )
-    ) {
-      setMessage(
-        "Select a valid amount."
-      );
-      return;
-    }
-
-    const request = {
-      id: makeId("ADD"),
-      type: "ADD_COINS",
-      coins: amount,
-      status: "PENDING",
-      createdAt:
-        new Date().toISOString()
-    };
-
-    setRequests((items) => [
-      request,
-      ...items
-    ]);
-
-    setMessage(
-      `Request ${request.id} submitted.`
-    );
-  }
-
-  function requestRedeem() {
-    const amount =
-      Number(redeemAmount);
-
-    if (
-      !Number.isFinite(amount) ||
-      amount < 1
-    ) {
-      setMessage(
-        "Enter a valid coin amount."
-      );
-      return;
-    }
-
-    if (amount > coins) {
-      setMessage(
-        "Not enough coins."
-      );
-      return;
-    }
-
-    const request = {
-      id: makeId("RED"),
-      type: "REDEEM",
-      coins: amount,
-      status: "PENDING",
-      createdAt:
-        new Date().toISOString()
-    };
-
-    setRedeems((items) => [
-      request,
-      ...items
-    ]);
-
-    setRedeemAmount("");
-
-    setMessage(
-      `Redeem request ${request.id} submitted.`
-    );
-  }
-
-  const pendingAdd =
-    requests.filter(
-      (x) => x.status === "PENDING"
-    ).length;
-
-  const pendingRedeem =
-    redeems.filter(
-      (x) => x.status === "PENDING"
-    ).length;
+  const [
+    redeemAmount,
+    setRedeemAmount,
+  ] = useState("");
 
   return (
     <div className="page">
-      <div className="title">
-        <div>
-          <small>MY COINS</small>
-          <h1>Coin Center</h1>
-        </div>
-      </div>
+      <small>
+        MY COINS
+      </small>
+
+      <h1>
+        Virtual Coin Center
+      </h1>
 
       <section className="balance">
-        <small>AVAILABLE COINS</small>
+        <small>
+          AVAILABLE VIRTUAL COINS
+        </small>
 
         <h1>
           🪙 {fmt(coins)}
@@ -1825,75 +2276,56 @@ function Wallet({
       </section>
 
       <section className="marketBlock">
-        <div className="marketHeader">
-          <div>
-            <b>Request Coins</b>
-            <small>
-              Select an amount
-            </small>
-          </div>
-        </div>
+        <MarketHeader
+          title="Request Virtual Coins"
+        />
 
         <div className="quickMoney">
-          {COIN_REQUEST_AMOUNTS.map(
+          {[
+            300,
+            500,
+            1000,
+            2000,
+            5000,
+          ].map(
             (amount) => (
               <button
                 key={amount}
-                className={
-                  requestAmount ===
-                  amount
-                    ? "active"
-                    : ""
-                }
                 onClick={() =>
-                  setRequestAmount(
+                  requestCoins(
                     amount
                   )
                 }
               >
-                🪙{" "}
-                {amount.toLocaleString(
-                  "en-IN"
-                )}
+                ＋{" "}
+                {fmt(amount)}
               </button>
             )
           )}
         </div>
 
-        <button
-          className="primary"
-          onClick={requestCoins}
-        >
-          Submit Coin Request
-        </button>
-
-        {pendingAdd > 0 && (
-          <p className="note">
-            {pendingAdd} request
-            {pendingAdd > 1
-              ? "s"
-              : ""}{" "}
-            waiting for Admin approval.
-          </p>
-        )}
+        <div className="note">
+          Requests are
+          demo-only and do
+          not involve money
+          or payments.
+        </div>
       </section>
 
       <section className="marketBlock">
-        <div className="marketHeader">
-          <div>
-            <b>Redeem Coins</b>
-            <small>
-              Admin approval required
-            </small>
-          </div>
-        </div>
+        <MarketHeader
+          title="Virtual Redeem Request"
+        />
 
         <div className="customStake">
           <input
             type="number"
             min="1"
-            placeholder="Enter coins"
-            value={redeemAmount}
+            max={coins}
+            placeholder="Virtual coins"
+            value={
+              redeemAmount
+            }
             onChange={(e) =>
               setRedeemAmount(
                 e.target.value
@@ -1902,590 +2334,314 @@ function Wallet({
           />
 
           <button
-            onClick={() =>
+            onClick={() => {
+              requestRedeem(
+                redeemAmount
+              );
               setRedeemAmount(
-                String(coins)
-              )
-            }
+                ""
+              );
+            }}
           >
-            MAX
+            Request
           </button>
         </div>
 
-        <button
-          className="primary"
-          onClick={requestRedeem}
-        >
-          Submit Redeem Request
-        </button>
-
-        {pendingRedeem > 0 && (
-          <p className="note">
-            {pendingRedeem} redeem
-            request
-            {pendingRedeem > 1
-              ? "s"
-              : ""}{" "}
-            waiting for Admin approval.
-          </p>
-        )}
+        <div className="note">
+          Demo virtual
+          redemption only.
+          Coins have no cash
+          value.
+        </div>
       </section>
 
-      {message && (
-        <div className="note">
-          {message}
-        </div>
-      )}
-
       <section className="marketBlock">
-        <div className="marketHeader">
-          <div>
-            <b>Admin</b>
-            <small>
-              Manage coin requests
-            </small>
-          </div>
-        </div>
+        <MarketHeader
+          title="My Requests"
+        />
 
-        <button
-          className="primary"
-          onClick={() =>
-            setPage("admin")
-          }
-        >
-          Open Admin Panel →
-        </button>
+        <div className="requestList">
+          {requests.length ===
+            0 &&
+          redeems.length ===
+            0 ? (
+            <div className="empty">
+              No requests yet.
+            </div>
+          ) : (
+            <>
+              {requests.map(
+                (r) => (
+                  <div
+                    className="requestRow"
+                    key={`coin-${r.id}`}
+                  >
+                    <span>
+                      🪙 +
+                      {fmt(
+                        r.amount
+                      )}{" "}
+                      virtual
+                      coins
+
+                      <small>
+                        {new Date(
+                          r.requestedAt
+                        ).toLocaleString(
+                          "en-IN"
+                        )}
+                      </small>
+                    </span>
+
+                    <b>
+                      {r.status}
+                    </b>
+                  </div>
+                )
+              )}
+
+              {redeems.map(
+                (r) => (
+                  <div
+                    className="requestRow"
+                    key={`redeem-${r.id}`}
+                  >
+                    <span>
+                      🪙 −
+                      {fmt(
+                        r.amount
+                      )}{" "}
+                      virtual
+                      coins
+
+                      <small>
+                        {new Date(
+                          r.requestedAt
+                        ).toLocaleString(
+                          "en-IN"
+                        )}
+                      </small>
+                    </span>
+
+                    <b>
+                      {r.status}
+                    </b>
+                  </div>
+                )
+              )}
+            </>
+          )}
+        </div>
       </section>
 
       <div className="note">
-        Coin requests are stored locally
-        in this browser. Connect them to
-        your backend before using this as a
-        multi-user application.
+        No deposits, UPI
+        payments, cash
+        withdrawals or
+        real-money
+        wagering.
       </div>
     </div>
   );
 }
 
-/* =========================================================
-   ADMIN PANEL
-   ========================================================= */
-
-function Admin({
-  coins,
-  setCoins,
-  back
+function AdminPanel({
+  requests,
+  redeems,
+  approveCoin,
+  rejectCoin,
+  approveRedeem,
+  rejectRedeem,
+  close,
+  pendingCoins,
+  pendingRedeems,
 }) {
-  const [requests, setRequests] =
-    useState(() =>
-      readLocalArray(
-        "novaCoinRequests"
-      )
-    );
-
-  const [redeems, setRedeems] =
-    useState(() =>
-      readLocalArray(
-        "novaRedeemRequests"
-      )
-    );
-
-  const [message, setMessage] =
-    useState("");
-
-  useEffect(() => {
-    localStorage.setItem(
-      "novaCoinRequests",
-      JSON.stringify(requests)
-    );
-  }, [requests]);
-
-  useEffect(() => {
-    localStorage.setItem(
-      "novaRedeemRequests",
-      JSON.stringify(redeems)
-    );
-  }, [redeems]);
-
-  function approveCoin(id) {
-    const request =
-      requests.find(
-        (r) =>
-          r.id === id &&
-          r.status === "PENDING"
-      );
-
-    if (!request) return;
-
-    const amount =
-      Number(request.coins);
-
-    if (
-      !Number.isFinite(amount) ||
-      amount <= 0
-    ) {
-      setMessage(
-        "Invalid coin request."
-      );
-      return;
-    }
-
-    setCoins(
-      (current) =>
-        current + amount
-    );
-
-    setRequests((items) =>
-      items.map((r) =>
-        r.id === id
-          ? {
-              ...r,
-              status: "APPROVED",
-              approvedAt:
-                new Date().toISOString()
-            }
-          }
-          : r
-      )
-    );
-
-    setMessage(
-      `Approved ${id}: 🪙 ${fmt(
-        amount
-      )} added.`
-    );
-  }
-
-  function rejectCoin(id) {
-    const request =
-      requests.find(
-        (r) =>
-          r.id === id &&
-          r.status === "PENDING"
-      );
-
-    if (!request) return;
-
-    setRequests((items) =>
-      items.map((r) =>
-        r.id === id
-          ? {
-              ...r,
-              status: "REJECTED",
-              rejectedAt:
-                new Date().toISOString()
-            }
-          : r
-      )
-    );
-
-    setMessage(
-      `Rejected ${id}.`
-    );
-  }
-
-  function approveRedeem(id) {
-    const request =
-      redeems.find(
-        (r) =>
-          r.id === id &&
-          r.status === "PENDING"
-      );
-
-    if (!request) return;
-
-    const amount =
-      Number(request.coins);
-
-    if (
-      !Number.isFinite(amount) ||
-      amount <= 0
-    ) {
-      setMessage(
-        "Invalid redeem request."
-      );
-      return;
-    }
-
-    if (amount > coins) {
-      setMessage(
-        `Cannot approve ${id}: insufficient coins.`
-      );
-      return;
-    }
-
-    setCoins(
-      (current) =>
-        current - amount
-    );
-
-    setRedeems((items) =>
-      items.map((r) =>
-        r.id === id
-          ? {
-              ...r,
-              status: "APPROVED",
-              approvedAt:
-                new Date().toISOString()
-            }
-          : r
-      )
-    );
-
-    setMessage(
-      `Approved ${id}: 🪙 ${fmt(
-        amount
-      )} deducted.`
-    );
-  }
-
-  function rejectRedeem(id) {
-    const request =
-      redeems.find(
-        (r) =>
-          r.id === id &&
-          r.status === "PENDING"
-      );
-
-    if (!request) return;
-
-    setRedeems((items) =>
-      items.map((r) =>
-        r.id === id
-          ? {
-              ...r,
-              status: "REJECTED",
-              rejectedAt:
-                new Date().toISOString()
-            }
-          : r
-      )
-    );
-
-    setMessage(
-      `Rejected ${id}.`
-    );
-  }
-
-  function clearProcessed() {
-    setRequests((items) =>
-      items.filter(
-        (r) =>
-          r.status === "PENDING"
-      )
-    );
-
-    setRedeems((items) =>
-      items.filter(
-        (r) =>
-          r.status === "PENDING"
-      )
-    );
-
-    setMessage(
-      "Processed requests cleared."
-    );
-  }
-
-  const pendingCoins =
-    requests.filter(
-      (r) => r.status === "PENDING"
-    );
-
-  const pendingRedeems =
-    redeems.filter(
-      (r) => r.status === "PENDING"
-    );
-
   return (
-    <div className="page">
-      <div className="title">
+    <aside className="adminPanel">
+      <div className="adminHead">
         <div>
-          <small>ADMIN</small>
-          <h1>Admin Panel</h1>
+          <small>
+            DEMO CONTROL
+          </small>
+
+          <h2>
+            Admin Panel
+          </h2>
         </div>
 
-        <button onClick={back}>
-          ← Back
+        <button
+          onClick={close}
+        >
+          ×
         </button>
       </div>
 
-      <section className="balance">
-        <small>
-          CURRENT BROWSER COIN BALANCE
-        </small>
-
-        <h1>
-          🪙 {fmt(coins)}
-        </h1>
-      </section>
-
-      {message && (
-        <div className="note">
-          {message}
-        </div>
-      )}
-
-      {/* ADD COIN REQUESTS */}
-
-      <section className="marketBlock">
-        <div className="marketHeader">
-          <div>
-            <b>
-              Coin Requests
-            </b>
-
-            <small>
-              Pending:{" "}
-              {pendingCoins.length}
-            </small>
-          </div>
+      <div className="adminStats">
+        <div>
+          <b>
+            {pendingCoins}
+          </b>
+          <small>
+            Coin requests
+          </small>
         </div>
 
-        {!pendingCoins.length ? (
-          <div className="empty">
-            No pending coin requests.
-          </div>
-        ) : (
-          <div className="adminList">
-            {pendingCoins.map(
-              (r) => (
-                <div
-                  className="adminItem"
-                  key={r.id}
-                >
-                  <div>
-                    <b>
-                      {r.id}
-                    </b>
-
-                    <small>
-                      Requested coins
-                    </small>
-
-                    <strong>
-                      🪙{" "}
-                      {fmt(r.coins)}
-                    </strong>
-
-                    <small>
-                      {new Date(
-                        r.createdAt
-                      ).toLocaleString(
-                        "en-IN"
-                      )}
-                    </small>
-                  </div>
-
-                  <div className="adminActions">
-                    <button
-                      className="primary"
-                      onClick={() =>
-                        approveCoin(
-                          r.id
-                        )
-                      }
-                    >
-                      Approve
-                    </button>
-
-                    <button
-                      className="cancel"
-                      onClick={() =>
-                        rejectCoin(
-                          r.id
-                        )
-                      }
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              )
-            )}
-          </div>
-        )}
-      </section>
-
-      {/* REDEEM REQUESTS */}
-
-      <section className="marketBlock">
-        <div className="marketHeader">
-          <div>
-            <b>
-              Redeem Requests
-            </b>
-
-            <small>
-              Pending:{" "}
-              {pendingRedeems.length}
-            </small>
-          </div>
+        <div>
+          <b>
+            {pendingRedeems}
+          </b>
+          <small>
+            Redeem requests
+          </small>
         </div>
+      </div>
 
-        {!pendingRedeems.length ? (
-          <div className="empty">
-            No pending redeem requests.
-          </div>
-        ) : (
-          <div className="adminList">
-            {pendingRedeems.map(
-              (r) => (
-                <div
-                  className="adminItem"
-                  key={r.id}
-                >
-                  <div>
-                    <b>
-                      {r.id}
-                    </b>
+      <h3>
+        Coin Requests
+      </h3>
 
-                    <small>
-                      Requested coins
-                    </small>
-
-                    <strong>
-                      🪙{" "}
-                      {fmt(r.coins)}
-                    </strong>
-
-                    <small>
-                      {new Date(
-                        r.createdAt
-                      ).toLocaleString(
-                        "en-IN"
-                      )}
-                    </small>
-                  </div>
-
-                  <div className="adminActions">
-                    <button
-                      className="primary"
-                      onClick={() =>
-                        approveRedeem(
-                          r.id
-                        )
-                      }
-                    >
-                      Approve
-                    </button>
-
-                    <button
-                      className="cancel"
-                      onClick={() =>
-                        rejectRedeem(
-                          r.id
-                        )
-                      }
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              )
-            )}
-          </div>
-        )}
-      </section>
-
-      {/* HISTORY */}
-
-      <section className="marketBlock">
-        <div className="marketHeader">
-          <div>
-            <b>
-              Request History
-            </b>
-
-            <small>
-              Approved and rejected
-              requests
-            </small>
-          </div>
+      {requests.length ===
+      0 ? (
+        <div className="empty">
+          No coin requests.
         </div>
-
-        {[...requests, ...redeems]
-          .filter(
-            (r) =>
-              r.status !== "PENDING"
-          )
-          .sort(
-            (a, b) =>
-              new Date(
-                b.approvedAt ||
-                  b.rejectedAt ||
-                  b.createdAt
-              ) -
-              new Date(
-                a.approvedAt ||
-                  a.rejectedAt ||
-                  a.createdAt
-              )
-          )
-          .slice(0, 20)
-          .map((r) => (
+      ) : (
+        requests.map(
+          (r) => (
             <div
-              className="adminItem"
+              className="adminRow"
               key={r.id}
             >
               <div>
-                <b>{r.id}</b>
+                <b>
+                  🪙{" "}
+                  {fmt(
+                    r.amount
+                  )}
+                </b>
 
                 <small>
-                  {r.type ===
-                  "ADD_COINS"
-                    ? "Add Coins"
-                    : "Redeem"}
-                </small>
-
-                <strong>
-                  🪙 {fmt(r.coins)}
-                </strong>
-
-                <small>
-                  Status:{" "}
                   {r.status}
                 </small>
               </div>
-            </div>
-          ))}
 
-        <button
-          className="ghost"
-          onClick={
-            clearProcessed
-          }
-        >
-          Clear Processed History
-        </button>
-      </section>
+              {r.status ===
+                "PENDING" && (
+                <div>
+                  <button
+                    onClick={() =>
+                      approveCoin(
+                        r.id
+                      )
+                    }
+                  >
+                    Approve
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      rejectCoin(
+                        r.id
+                      )
+                    }
+                  >
+                    Reject
+                  </button>
+                </div>
+              )}
+            </div>
+          )
+        )
+      )}
+
+      <h3>
+        Redeem Requests
+      </h3>
+
+      {redeems.length ===
+      0 ? (
+        <div className="empty">
+          No redeem requests.
+        </div>
+      ) : (
+        redeems.map(
+          (r) => (
+            <div
+              className="adminRow"
+              key={r.id}
+            >
+              <div>
+                <b>
+                  🪙{" "}
+                  {fmt(
+                    r.amount
+                  )}
+                </b>
+
+                <small>
+                  {r.status}
+                </small>
+              </div>
+
+              {r.status ===
+                "PENDING" && (
+                <div>
+                  <button
+                    onClick={() =>
+                      approveRedeem(
+                        r.id
+                      )
+                    }
+                  >
+                    Approve
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      rejectRedeem(
+                        r.id
+                      )
+                    }
+                  >
+                    Reject
+                  </button>
+                </div>
+              )}
+            </div>
+          )
+        )
+      )}
 
       <div className="note">
-        This Admin Panel currently
-        operates through this browser's
-        localStorage. It is not a secure
-        server-side administrator system.
+        This panel is a local
+        demo control using
+        browser storage. It
+        does not process
+        money.
       </div>
-    </div>
+    </aside>
   );
 }
-
-/* =========================================================
-   GAMES
-   ========================================================= */
 
 function Games() {
   return (
     <div className="page">
-      <small>GAME LOUNGE</small>
+      <small>
+        GAME LOUNGE
+      </small>
 
-      <h1>Play Zone</h1>
+      <h1>
+        Play Zone
+      </h1>
 
       <section className="gameHero">
-        <h2>Neon Game Night</h2>
+        <h2>
+          Neon Game Night
+        </h2>
 
         <p>
-          Arcade-style demo games using
+          Arcade-style demo
+          games using virtual
           coins.
         </p>
 
@@ -2499,33 +2655,41 @@ function Games() {
           "🃏 Card Room",
           "🎯 Spin Arena",
           "🕹️ Retro Rush",
-          "🏆 Prize Room"
-        ].map((x) => (
-          <button key={x}>
-            <b>
-              {x.split(" ")[0]}
-            </b>
+          "🏆 Prize Room",
+        ].map(
+          (x) => (
+            <button
+              key={x}
+            >
+              <b>
+                {x.split(
+                  " "
+                )[0]}
+              </b>
 
-            {x.slice(2)}
+              {x.slice(2)}
 
-            <small>
-              Demo game
-            </small>
-          </button>
-        ))}
+              <small>
+                Demo game
+              </small>
+            </button>
+          )
+        )}
       </div>
     </div>
   );
 }
 
 function ErrorBoundary({
-  children
+  children,
 }) {
   return children;
 }
 
 createRoot(
-  document.getElementById("root")
+  document.getElementById(
+    "root"
+  )
 ).render(
   <ErrorBoundary>
     <App />
