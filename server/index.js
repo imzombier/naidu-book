@@ -1,59 +1,25 @@
-import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const express = require("express");
+const path = require("path");
 
 const app = express();
+
 const PORT = process.env.PORT || 10000;
-
-const API_KEY = process.env.ODDSRADARWIRE_API_KEY;
 const BASE_URL = "https://oddsradarwire.com";
+const API_KEY = process.env.ODDSRADARWIRE_API_KEY;
 
-// Short server-side cache.
-// This prevents every browser refresh/user from consuming API calls.
-const CACHE_MS = 60 * 1000;
+app.use(express.json());
+
+/* -------------------------------------------------------
+   SIMPLE CACHE
+   Free OddsRadarWire plan = 100 REST calls/day.
+   We cache for 60 seconds so the website doesn't
+   repeatedly consume the API quota.
+------------------------------------------------------- */
 
 const cache = new Map();
+const CACHE_MS = 60 * 1000;
 
-/*
-  One NOVA PLAY sport = one OddsRadarWire sport.
-
-  This is intentionally NOT using The Odds API sport keys anymore.
-*/
-const SPORTS = {
-  cricket: {
-    key: "cricket",
-    title: "Cricket",
-    providerSport: "CRICKET",
-  },
-
-  soccer: {
-    key: "soccer",
-    title: "Football",
-    providerSport: "SOCCER",
-  },
-
-  tennis: {
-    key: "tennis",
-    title: "Tennis",
-    providerSport: "TENNIS",
-  },
-
-  basketball: {
-    key: "basketball",
-    title: "Basketball",
-    providerSport: "BASKETBALL",
-  },
-};
-
-
-// ----------------------------------------------------
-// CACHE
-// ----------------------------------------------------
-
-function getCache(key) {
+function getCached(key) {
   const item = cache.get(key);
 
   if (!item) return null;
@@ -66,33 +32,55 @@ function getCache(key) {
   return item.data;
 }
 
-function setCache(key, data) {
+function setCached(key, data) {
   cache.set(key, {
     time: Date.now(),
-    data,
+    data
   });
 }
 
+/* -------------------------------------------------------
+   SPORTS
+------------------------------------------------------- */
 
-// ----------------------------------------------------
-// ODDSRADARWIRE REQUEST
-// ----------------------------------------------------
+const SPORTS = {
+  cricket: {
+    key: "cricket",
+    title: "Cricket",
+    providerSport: "CRICKET"
+  },
+
+  soccer: {
+    key: "soccer",
+    title: "Football",
+    providerSport: "SOCCER"
+  },
+
+  tennis: {
+    key: "tennis",
+    title: "Tennis",
+    providerSport: "TENNIS"
+  },
+
+  basketball: {
+    key: "basketball",
+    title: "Basketball",
+    providerSport: "BASKETBALL"
+  }
+};
+
+/* -------------------------------------------------------
+   ODDSRADARWIRE REQUEST
+------------------------------------------------------- */
 
 async function oddsRadarRequest(endpoint, params = {}) {
-
   if (!API_KEY) {
-    const error = new Error(
-      "Missing ODDSRADARWIRE_API_KEY environment variable"
-    );
-
-    error.status = 503;
-
-    throw error;
+    throw new Error("ODDSRADARWIRE_API_KEY is missing");
   }
 
   const url = new URL(BASE_URL + endpoint);
 
-  for (const [key, value] of Object.entries(params)) {
+  Object.entries(params).forEach(([key, value]) => {
     if (
       value !== undefined &&
       value !== null &&
@@ -100,15 +88,14 @@ async function oddsRadarRequest(endpoint, params = {}) {
     ) {
       url.searchParams.set(key, value);
     }
-  }
+  });
 
   const response = await fetch(url, {
     method: "GET",
-
     headers: {
       "x-api-key": API_KEY,
-      "Accept": "application/json",
-    },
+      "accept": "application/json"
+    }
   });
 
   const text = await response.text();
@@ -116,43 +103,30 @@ async function oddsRadarRequest(endpoint, params = {}) {
   let data;
 
   try {
-    data = text ? JSON.parse(text) : {};
+    data = JSON.parse(text);
   } catch {
-    data = {
-      raw: text,
-    };
+    throw new Error(
+      `OddsRadarWire returned invalid JSON (${response.status})`
+    );
   }
 
   if (!response.ok) {
-
-    const error = new Error(
+    const errorMessage =
       data?.message ||
       data?.error ||
-      `OddsRadarWire HTTP ${response.status}`
-    );
+      `OddsRadarWire HTTP ${response.status}`;
 
-    error.status = response.status;
-    error.body = data;
-
-    const retryAfter = response.headers.get("retry-after");
-
-    if (retryAfter) {
-      error.retryAfter = retryAfter;
-    }
-
-    throw error;
+    throw new Error(errorMessage);
   }
 
   return data;
 }
 
+/* -------------------------------------------------------
+   GET FIXTURE ARRAY
+------------------------------------------------------- */
 
-// ----------------------------------------------------
-// ARRAY HELPER
-// ----------------------------------------------------
-
-function getFixtures(data) {
-
+function extractFixtures(data) {
   if (Array.isArray(data)) {
     return data;
   }
@@ -161,773 +135,491 @@ function getFixtures(data) {
     return data.fixtures;
   }
 
-  if (Array.isArray(data?.events)) {
-    return data.events;
-  }
-
   if (Array.isArray(data?.data)) {
     return data.data;
+  }
+
+  if (Array.isArray(data?.events)) {
+    return data.events;
   }
 
   return [];
 }
 
+/* -------------------------------------------------------
+   FIND MATCH WINNER MARKET
+------------------------------------------------------- */
 
-// ----------------------------------------------------
-// TEAM NAMES
-// ----------------------------------------------------
-
-function getTeams(fixture) {
-
-  const competitors = Array.isArray(
-    fixture?.competitors
-  )
-    ? fixture.competitors
-    : [];
-
-  let home = competitors.find(
-    c => c?.isHome === true
-  )?.name;
-
-  let away = competitors.find(
-    c => c?.isHome === false
-  )?.name;
-
-  // Safety fallback
-  if (!home && competitors[0]) {
-    home = competitors[0].name;
-  }
-
-  if (!away && competitors[1]) {
-    away = competitors[1].name;
-  }
-
-  home =
-    home ||
-    fixture?.home_team ||
-    fixture?.homeTeam ||
-    "Home";
-
-  away =
-    away ||
-    fixture?.away_team ||
-    fixture?.awayTeam ||
-    "Away";
-
-  return {
-    home,
-    away,
-  };
-}
-
-
-// ----------------------------------------------------
-// SELECTION NAME
-// ----------------------------------------------------
-
-function getSelectionName(selection, teams) {
-
-  const value = String(
-    selection?.name ??
-    selection?.selection ??
-    selection?.label ??
-    selection?.side ??
-    ""
-  ).trim();
-
-  const lower = value.toLowerCase();
-
-  if (
-    lower === "home" ||
-    lower === "1" ||
-    lower === "team1"
-  ) {
-    return teams.home;
-  }
-
-  if (
-    lower === "away" ||
-    lower === "2" ||
-    lower === "team2"
-  ) {
-    return teams.away;
-  }
-
-  if (value === teams.home) {
-    return teams.home;
-  }
-
-  if (value === teams.away) {
-    return teams.away;
-  }
-
-  return value;
-}
-
-
-// ----------------------------------------------------
-// VIRTUAL LAY PRICE
-// ----------------------------------------------------
-
-function makeLayPrice(backPrice) {
-
-  const price = Number(backPrice);
-
-  if (
-    !Number.isFinite(price) ||
-    price <= 1
-  ) {
-    return null;
-  }
-
-  /*
-    Your requested NOVA PLAY virtual Lay rule:
-
-    Back <= 5.00
-      Lay = Back + 0.04
-
-    Back > 5.00
-      Lay = Back + 1.00
-  */
-
-  if (price > 5) {
-    return Number(
-      (price + 1).toFixed(2)
-    );
-  }
-
-  return Number(
-    (price + 0.04).toFixed(2)
-  );
-}
-
-
-// ----------------------------------------------------
-// NORMALIZE ONE FIXTURE
-// ----------------------------------------------------
-
-function normalizeFixture(
-  fixture,
-  sportKey,
-  sportTitle
-) {
-
-  const teams = getTeams(fixture);
-
-  const markets = Array.isArray(
-    fixture?.markets
-  )
+function findWinnerMarket(fixture) {
+  const markets = Array.isArray(fixture?.markets)
     ? fixture.markets
     : [];
 
-  /*
-    OddsRadarWire uses canonical:
-      match_winner
-
-    We only need the Match Winner market
-    for the existing NOVA PLAY Match Odds UI.
-  */
-
-  const winnerMarkets = markets.filter(
-    market =>
-      market &&
-      (
-        market.canonical === "match_winner" ||
-        String(
-          market.market || ""
-        )
-          .toLowerCase()
-          .includes("winner")
-      )
+  // Prefer the documented canonical key.
+  let market = markets.find(
+    m =>
+      String(m?.canonical || "").toLowerCase() ===
+      "match_winner"
   );
 
-  const market =
-    winnerMarkets.find(
-      m =>
-        m.status === "OPEN" &&
-        Number(m.tier) === 1
-    ) ||
-    winnerMarkets.find(
-      m => m.status === "OPEN"
-    ) ||
-    winnerMarkets[0];
+  if (market) return market;
 
-  if (!market) {
+  // Fallback for provider naming differences.
+  market = markets.find(m => {
+    const text = String(
+      m?.market || m?.name || ""
+    ).toLowerCase();
+
+    return (
+      text.includes("match winner") ||
+      text === "winner" ||
+      text.includes("winner")
+    );
+  });
+
+  return market || null;
+}
+
+/* -------------------------------------------------------
+   GET SELECTION NAME
+------------------------------------------------------- */
+
+function selectionName(selection, competitors) {
+  const raw =
+    selection?.name ||
+    selection?.label ||
+    selection?.selection ||
+    selection?.outcome ||
+    selection?.side;
+
+  if (raw !== undefined && raw !== null) {
+    const value = String(raw);
+
+    const lower = value.toLowerCase();
+
+    if (
+      lower !== "home" &&
+      lower !== "away" &&
+      lower !== "draw"
+    ) {
+      return value;
+    }
+
+    if (lower === "home" && competitors[0]) {
+      return competitors[0].name;
+    }
+
+    if (lower === "away" && competitors[1]) {
+      return competitors[1].name;
+    }
+
+    if (lower === "draw") {
+      return "Draw";
+    }
+  }
+
+  return "Selection";
+}
+
+/* -------------------------------------------------------
+   CREATE LAY PRICE
+------------------------------------------------------- */
+
+function makeLayPrice(backPrice) {
+  const price = Number(backPrice) || 0;
+
+  if (price <= 0) {
     return null;
   }
 
-  const selections =
-    Array.isArray(market.selections)
-      ? market.selections
-      : [];
+  if (price > 5) {
+    return Number((price + 1).toFixed(2));
+  }
 
-  const outcomes = selections
-    .map(selection => {
+  return Number((price + 0.04).toFixed(2));
+}
 
-      const price =
-        Number(selection?.price);
+/* -------------------------------------------------------
+   NORMALIZE ONE FIXTURE
+------------------------------------------------------- */
 
-      return {
-        name: getSelectionName(
-          selection,
-          teams
-        ),
-
-        price,
-
-        status:
-          selection?.status ||
-          market?.status ||
-          "OPEN",
-      };
-    })
-    .filter(
-      outcome =>
-        outcome.name &&
-        Number.isFinite(
-          outcome.price
-        ) &&
-        outcome.price > 1
-    );
-
-  /*
-    Match Winner should contain the two teams.
-  */
-
-  const home =
-    outcomes.find(
-      o => o.name === teams.home
-    );
-
-  const away =
-    outcomes.find(
-      o => o.name === teams.away
-    );
-
-  const selected = [
-    home,
-    away,
-  ].filter(Boolean);
-
-  if (!selected.length) {
+function normalizeFixture(fixture) {
+  if (!fixture || !fixture.id) {
     return null;
   }
 
+  const competitors = Array.isArray(fixture.competitors)
+    ? fixture.competitors
+    : [];
 
-  // --------------------------------------------------
-  // BACK
-  // --------------------------------------------------
+  if (competitors.length < 2) {
+    return null;
+  }
 
-  const backOutcomes =
-    selected.map(outcome => ({
-      name: outcome.name,
-      price: outcome.price,
-    }));
+  const winnerMarket = findWinnerMarket(fixture);
 
+  if (!winnerMarket) {
+    return null;
+  }
 
-  // --------------------------------------------------
-  // VIRTUAL LAY
-  // --------------------------------------------------
+  const selections = Array.isArray(
+    winnerMarket.selections
+  )
+    ? winnerMarket.selections
+    : [];
 
-  const layOutcomes =
-    selected
-      .map(outcome => {
+  if (!selections.length) {
+    return null;
+  }
 
-        const lay =
-          makeLayPrice(
-            outcome.price
-          );
+  const outcomes = [];
 
-        if (!lay) return null;
+  for (const selection of selections) {
+    const price = Number(selection?.price);
 
-        return {
-          name: outcome.name,
-          price: lay,
-        };
-      })
-      .filter(Boolean);
+    if (!Number.isFinite(price) || price <= 1) {
+      continue;
+    }
 
+    const name = selectionName(
+      selection,
+      competitors
+    );
 
-  // --------------------------------------------------
-  // CONVERT TO EXISTING NOVA PLAY FORMAT
-  // --------------------------------------------------
+    if (!name || name === "Selection") {
+      continue;
+    }
 
-  const bookmakers = [
+    outcomes.push({
+      name,
+      price
+    });
+  }
 
-    {
-      key: "oddsradarwire",
+  if (outcomes.length < 2) {
+    return null;
+  }
 
-      title: "OddsRadarWire",
+  const layOutcomes = outcomes.map(outcome => ({
+    name: outcome.name,
+    price: makeLayPrice(outcome.price)
+  }));
 
-      last_update:
-        new Date().toISOString(),
+  const isLive =
+    fixture.phase === "live" ||
+    fixture.in_play === true ||
+    fixture.inPlay === true;
 
-      markets: [
-
-        {
-          key: "h2h",
-
-          last_update:
-            new Date().toISOString(),
-
-          outcomes:
-            backOutcomes,
-        },
-
-        {
-          key: "h2h_lay",
-
-          last_update:
-            new Date().toISOString(),
-
-          outcomes:
-            layOutcomes,
-        },
-
-      ],
-    },
-
-  ];
-
+  const commenceTime =
+    fixture.start_time ||
+    fixture.commence_time ||
+    fixture.scheduled_start ||
+    fixture.startTime ||
+    null;
 
   return {
+    id: fixture.id,
 
-    id: String(
-      fixture.id
-    ),
-
-    sport_key:
-      sportKey,
-
-    sport_title:
-      sportTitle,
-
-    commence_time:
-      fixture.commence_time ||
-      fixture.commenceTime ||
-      fixture.start_time ||
-      fixture.startTime ||
-      null,
+    sport: String(
+      fixture.sport || ""
+    ).toLowerCase(),
 
     home_team:
-      teams.home,
+      competitors[0]?.name || "Team 1",
 
     away_team:
-      teams.away,
+      competitors[1]?.name || "Team 2",
 
-    bookmakers,
+    homeTeam:
+      competitors[0]?.name || "Team 1",
 
-    source:
-      "oddsradarwire",
+    awayTeam:
+      competitors[1]?.name || "Team 2",
 
-    provider:
-      fixture.provider ||
-      "BETRADAR",
+    commence_time: commenceTime,
+
+    commenceTime,
+
+    time:
+      commenceTime,
+
+    live: isLive,
+
+    in_play: isLive,
+
+    status:
+      isLive ? "LIVE" : "UPCOMING",
 
     phase:
-      fixture.phase ||
-      null,
+      fixture.phase || null,
 
     competition:
-      fixture.competition ||
-      null,
+      fixture.competition || null,
 
+    bookmakers: [
+      {
+        key: "oddsradarwire",
+        title: "OddsRadarWire",
+
+        markets: [
+          {
+            key: "h2h",
+            market: "Match Winner",
+            outcomes
+          },
+
+          {
+            key: "h2h_lay",
+            market: "Match Winner Lay",
+            outcomes: layOutcomes
+          }
+        ]
+      }
+    ],
+
+    // Easier access for our frontend.
+    h2h: outcomes,
+
+    h2h_lay: layOutcomes
   };
 }
 
+/* -------------------------------------------------------
+   GET ODDS
+------------------------------------------------------- */
 
-// ----------------------------------------------------
-// LOAD SPORT
-// ----------------------------------------------------
+app.get("/api/odds/:sport", async (req, res) => {
+  try {
+    const sportKey = String(
+      req.params.sport || ""
+    ).toLowerCase();
 
-async function loadSport(
-  sportKey
-) {
+    const sport = SPORTS[sportKey];
 
-  const config =
-    SPORTS[sportKey];
-
-  if (!config) {
-
-    const error =
-      new Error(
-        `Unsupported sport: ${sportKey}`
-      );
-
-    error.status = 404;
-
-    throw error;
-  }
-
-
-  const cacheKey =
-    `sport:${sportKey}`;
-
-
-  const cached =
-    getCache(cacheKey);
-
-  if (cached) {
-    return cached;
-  }
-
-
-  /*
-    OddsRadarWire separates:
-
-      live
-      prematch
-
-    So we fetch both.
-
-    Because this is cached on the server,
-    multiple website users do NOT each
-    trigger their own provider requests.
-  */
-
-  const [
-    liveData,
-    prematchData,
-  ] = await Promise.all([
-
-    oddsRadarRequest(
-      "/v1/fixtures",
-      {
-        event_type: "live",
-        sport:
-          config.providerSport,
-        canonical:
-          "match_winner",
-        tier: 1,
-        limit: 100,
-      }
-    ),
-
-    oddsRadarRequest(
-      "/v1/fixtures",
-      {
-        event_type: "prematch",
-        sport:
-          config.providerSport,
-        canonical:
-          "match_winner",
-        tier: 1,
-        limit: 100,
-      }
-    ),
-
-  ]);
-
-
-  const fixtures = [
-
-    ...getFixtures(
-      liveData
-    ),
-
-    ...getFixtures(
-      prematchData
-    ),
-
-  ];
-
-
-  const events = [];
-
-  const seen =
-    new Set();
-
-
-  for (
-    const fixture
-    of fixtures
-  ) {
-
-    if (!fixture?.id) {
-      continue;
+    if (!sport) {
+      return res.status(400).json({
+        error: "Unsupported sport",
+        supported: Object.keys(SPORTS)
+      });
     }
 
-    const id =
-      String(fixture.id);
+    const cacheKey = `odds:${sportKey}`;
 
-    if (seen.has(id)) {
-      continue;
+    const cached = getCached(cacheKey);
+
+    if (cached) {
+      return res.json(cached);
     }
 
-    seen.add(id);
+    /*
+      IMPORTANT:
 
+      We intentionally do NOT send:
 
-    const normalized =
-      normalizeFixture(
-        fixture,
-        sportKey,
-        config.title
-      );
+      canonical=match_winner
 
+      here.
 
-    if (normalized) {
-      events.push(
-        normalized
-      );
-    }
+      We first retrieve the actual fixtures and then
+      locate match_winner locally. This prevents a provider
+      filtering difference from turning the entire response
+      into [].
+    */
 
-  }
+    const [liveData, prematchData] =
+      await Promise.all([
+        oddsRadarRequest("/v1/fixtures", {
+          event_type: "live",
+          sport: sport.providerSport,
+          tier: 1,
+          limit: 100
+        }),
 
-
-  setCache(
-    cacheKey,
-    events
-  );
-
-
-  return events;
-}
-
-
-// ----------------------------------------------------
-// SPORTS
-// ----------------------------------------------------
-
-app.get(
-  "/api/sports",
-  (_req, res) => {
-
-    const sports =
-      Object.values(
-        SPORTS
-      ).map(
-        sport => ({
-
-          key:
-            sport.key,
-
-          group:
-            sport.title,
-
-          title:
-            sport.title,
-
-          description:
-            `${sport.title} odds`,
-
-          active:
-            true,
-
-          has_outrights:
-            false,
-
+        oddsRadarRequest("/v1/fixtures", {
+          event_type: "prematch",
+          sport: sport.providerSport,
+          tier: 1,
+          limit: 100
         })
-      );
+      ]);
 
+    const liveFixtures =
+      extractFixtures(liveData);
 
-    res.json(sports);
-  }
-);
+    const prematchFixtures =
+      extractFixtures(prematchData);
 
+    const allFixtures = [
+      ...liveFixtures,
+      ...prematchFixtures
+    ];
 
-// ----------------------------------------------------
-// ODDS
-// ----------------------------------------------------
+    // Remove duplicate fixture IDs.
+    const uniqueFixtures = [];
+    const seen = new Set();
 
-app.get(
-  "/api/odds/:sport",
-  async (req, res) => {
+    for (const fixture of allFixtures) {
+      const id = fixture?.id;
 
-    try {
-
-      const events =
-        await loadSport(
-          req.params.sport
-        );
-
-
-      res.set(
-        "x-oddsradarwire",
-        "true"
-      );
-
-      res.set(
-        "x-cache-ttl",
-        `${CACHE_MS}ms`
-      );
-
-
-      res.json(events);
-
-    } catch (error) {
-
-      console.error(
-        "OddsRadarWire error:",
-        error
-      );
-
-
-      if (
-        error.retryAfter
-      ) {
-
-        res.set(
-          "Retry-After",
-          error.retryAfter
-        );
-
+      if (!id || seen.has(id)) {
+        continue;
       }
 
-
-      res.status(
-        Number(error.status) ||
-        502
-      ).json({
-
-        error:
-          error.message,
-
-        provider:
-          "oddsradarwire",
-
-        details:
-          error.body ||
-          null,
-
-      });
-
+      seen.add(id);
+      uniqueFixtures.push(fixture);
     }
 
-  }
-);
+    const normalized = [];
 
+    for (const fixture of uniqueFixtures) {
+      const item = normalizeFixture(fixture);
 
-// ----------------------------------------------------
-// PROVIDER ACCOUNT STATUS
-// ----------------------------------------------------
-
-app.get(
-  "/api/provider/me",
-  async (_req, res) => {
-
-    try {
-
-      const data =
-        await oddsRadarRequest(
-          "/v1/me"
-        );
-
-      res.json(data);
-
-    } catch (error) {
-
-      res.status(
-        Number(error.status) ||
-        502
-      ).json({
-
-        error:
-          error.message,
-
-        details:
-          error.body ||
-          null,
-
-      });
-
+      if (item) {
+        normalized.push(item);
+      }
     }
 
+    /*
+      LIVE first, then upcoming.
+    */
+
+    normalized.sort((a, b) => {
+      if (a.live && !b.live) return -1;
+      if (!a.live && b.live) return 1;
+
+      const ta = a.commence_time
+        ? new Date(a.commence_time).getTime()
+        : Infinity;
+
+      const tb = b.commence_time
+        ? new Date(b.commence_time).getTime()
+        : Infinity;
+
+      return ta - tb;
+    });
+
+    setCached(cacheKey, normalized);
+
+    console.log(
+      `[OddsRadarWire] ${sportKey}: provider=${allFixtures.length}, normalized=${normalized.length}`
+    );
+
+    return res.json(normalized);
+
+  } catch (error) {
+    console.error(
+      "[OddsRadarWire ERROR]",
+      error
+    );
+
+    return res.status(502).json({
+      error: "Unable to load odds",
+      message: error.message
+    });
   }
-);
+});
 
+/* -------------------------------------------------------
+   SPORTS
+------------------------------------------------------- */
 
-// ----------------------------------------------------
-// PROVIDER HEALTH
-// ----------------------------------------------------
+app.get("/api/sports", (req, res) => {
+  res.json(
+    Object.values(SPORTS).map(sport => ({
+      key: sport.key,
+      group:
+        sport.key === "soccer"
+          ? "Football"
+          : sport.title,
 
-app.get(
-  "/api/provider/health",
-  async (_req, res) => {
+      title: sport.title,
 
-    try {
+      description:
+        `${sport.title} odds`,
 
-      const data =
-        await oddsRadarRequest(
-          "/v1/health"
-        );
+      active: true,
 
-      res.json(data);
-
-    } catch (error) {
-
-      res.status(
-        Number(error.status) ||
-        502
-      ).json({
-
-        error:
-          error.message,
-
-        details:
-          error.body ||
-          null,
-
-      });
-
-    }
-
-  }
-);
-
-
-// ----------------------------------------------------
-// FRONTEND
-// ----------------------------------------------------
-
-const distPath =
-  path.join(
-    __dirname,
-    "../dist"
+      has_outrights: false
+    }))
   );
+});
 
+/* -------------------------------------------------------
+   PROVIDER ACCOUNT
+------------------------------------------------------- */
+
+app.get("/api/provider/me", async (req, res) => {
+  try {
+    const data =
+      await oddsRadarRequest("/v1/me");
+
+    res.json(data);
+
+  } catch (error) {
+    res.status(502).json({
+      error: error.message
+    });
+  }
+});
+
+/* -------------------------------------------------------
+   PROVIDER HEALTH
+------------------------------------------------------- */
+
+app.get("/api/provider/health", async (req, res) => {
+  try {
+    const data =
+      await oddsRadarRequest("/v1/health");
+
+    res.json(data);
+
+  } catch (error) {
+    res.status(502).json({
+      error: error.message
+    });
+  }
+});
+
+/* -------------------------------------------------------
+   BASIC HEALTH
+------------------------------------------------------- */
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    service: "NOVA PLAY",
+    provider: "OddsRadarWire"
+  });
+});
+
+/* -------------------------------------------------------
+   FRONTEND
+------------------------------------------------------- */
+
+const distPath = path.join(
+  __dirname,
+  "../dist"
+);
 
 app.use(
-  express.static(
-    distPath
-  )
+  express.static(distPath)
 );
 
+app.get("/{*splat}", (req, res) => {
+  res.sendFile(
+    path.join(
+      distPath,
+      "index.html"
+    )
+  );
+});
 
-app.get(
-  "/{*splat}",
-  (_req, res) => {
+/* -------------------------------------------------------
+   START
+------------------------------------------------------- */
 
-    res.sendFile(
-      path.join(
-        distPath,
-        "index.html"
-      )
-    );
-
-  }
-);
-
-
-// ----------------------------------------------------
-// START
-// ----------------------------------------------------
-
-app.listen(
-  PORT,
-  () => {
-
-    console.log(
-      `NOVA PLAY running on port ${PORT}`
-    );
-
-    console.log(
-      "Odds provider: OddsRadarWire"
-    );
-
-    console.log(
-      "OddsRadarWire API key configured:",
-      Boolean(API_KEY)
-    );
-
-  }
-);
+app.listen(PORT, () => {
+  console.log(
+    `NOVA PLAY server running on port ${PORT}`
+  );
+});
