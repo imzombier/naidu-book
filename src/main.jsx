@@ -20,13 +20,14 @@ function toDate(value) {
   }
   const raw = String(value).trim();
   if (/^\d+$/.test(raw)) return toDate(Number(raw));
-  let d = new Date(raw);
-  if (!Number.isNaN(d.getTime())) return d;
-  // If a provider sends an ISO-like value without a timezone, treat it as UTC.
+  // Provider timestamps without an explicit timezone are treated as UTC.
+  // This avoids the browser interpreting them as local time and shifting the match.
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(raw)) {
-    d = new Date(`${raw}Z`);
+    const d = new Date(`${raw}Z`);
     if (!Number.isNaN(d.getTime())) return d;
   }
+  const d = new Date(raw);
+  if (!Number.isNaN(d.getTime())) return d;
   return null;
 }
 
@@ -227,7 +228,8 @@ function App() {
           />
         )}
         {page === "slip" && <Slip items={slip} setSlip={setSlip} />}
-        {page === "wallet" && <Wallet coins={coins} setCoins={setCoins} />}
+        {page === "wallet" && <Wallet coins={coins} setCoins={setCoins} openAdmin={() => setPage("admin")} />}
+        {page === "admin" && <Admin coins={coins} setCoins={setCoins} back={() => setPage("wallet")} />}
         {page === "games" && <Games />}
       </main>
 
@@ -444,8 +446,136 @@ function Slip({ items, setSlip }) {
     {!items.length ? <div className="empty big">🧾<br /><b>Slip is empty</b><small>Tap a BACK or LAY price on a match.</small></div> : <>{items.map((x, i) => { const c = calc(x.side, x.odds, x.stake); return <div className="slip" key={`${x.eventId}-${i}`}><div><span className={x.side}>{x.side.toUpperCase()}</span><b>{x.selection}</b><small>{x.eventName} · {x.market}</small><small>Stake 🪙 {fmt(x.stake)} · Profit +🪙 {fmt(c.profit)} · Liability 🪙 {fmt(c.liability)}</small></div><button onClick={() => setSlip((a) => a.filter((_, j) => j !== i))}>×</button></div>; })}<section className="stake"><div><b>Total stake</b><strong>🪙 {fmt(total)}</strong></div><div className="note">Virtual bets are already reserved from the demo balance.</div></section></>}</div>;
 }
 
-function Wallet({ coins, setCoins }) {
-  return <div className="page"><small>MY COINS</small><h1>Virtual Coin Center</h1><section className="balance"><small>AVAILABLE VIRTUAL COINS</small><h1>🪙 {fmt(coins)}</h1><button className="primary" onClick={() => setCoins((c) => c + 1000)}>＋ Claim 1,000</button></section><div className="note">No deposits, UPI payments or cash withdrawals. Coins have no cash value.</div></div>;
+function Wallet({ coins, setCoins, openAdmin }) {
+  const [requests, setRequests] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("novaCoinRequests") || "[]"); } catch { return []; }
+  });
+  const [redeems, setRedeems] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("novaRedeemRequests") || "[]"); } catch { return []; }
+  });
+  const [selectedPackage, setSelectedPackage] = useState(500);
+  const [redeemAmount, setRedeemAmount] = useState(500);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => localStorage.setItem("novaCoinRequests", JSON.stringify(requests)), [requests]);
+  useEffect(() => localStorage.setItem("novaRedeemRequests", JSON.stringify(redeems)), [redeems]);
+
+  function requestCoins() {
+    const item = {
+      id: `CR-${Date.now()}`,
+      coins: Number(selectedPackage),
+      createdAt: new Date().toISOString(),
+      status: "PENDING"
+    };
+    setRequests((x) => [item, ...x]);
+    setMessage(`Coin request ${item.id} submitted for ${fmt(item.coins)} virtual coins.`);
+  }
+
+  function requestRedeem() {
+    const amount = Number(redeemAmount) || 0;
+    if (amount < 1) return setMessage("Enter a valid virtual-coin amount.");
+    if (amount > coins) return setMessage("Not enough virtual coins.");
+    const item = {
+      id: `RD-${Date.now()}`,
+      coins: amount,
+      createdAt: new Date().toISOString(),
+      status: "PENDING"
+    };
+    setRedeems((x) => [item, ...x]);
+    setMessage(`Redeem request ${item.id} submitted for review.`);
+  }
+
+  return <div className="page">
+    <div className="title"><div><small>MY COINS</small><h1>Virtual Coin Center</h1></div><button onClick={openAdmin}>Admin Demo</button></div>
+    <section className="balance">
+      <small>AVAILABLE VIRTUAL COINS</small>
+      <h1>🪙 {fmt(coins)}</h1>
+      <button className="primary" onClick={() => setCoins((c) => c + 1000)}>＋ Claim 1,000 Demo Coins</button>
+    </section>
+
+    <section className="marketBlock">
+      <div className="marketHeader"><div><b>Request Virtual Coins</b><small>Demo wallet credit request</small></div></div>
+      <div className="quickMoney">
+        {[300, 500, 1000, 2000, 5000].map((x) => <button key={x} className={selectedPackage === x ? "active" : ""} onClick={() => setSelectedPackage(x)}>🪙 {fmt(x)}</button>)}
+      </div>
+      <button className="primary" onClick={requestCoins}>Submit Coin Request</button>
+    </section>
+
+    <section className="marketBlock">
+      <div className="marketHeader"><div><b>Redeem Virtual Coins</b><small>Demo redemption request — no cash payout</small></div></div>
+      <div className="quickMoney">
+        {[500, 1000, 2000, 5000].map((x) => <button key={x} className={redeemAmount === x ? "active" : ""} onClick={() => setRedeemAmount(Math.min(x, coins))}>🪙 {fmt(x)}</button>)}
+      </div>
+      <input className="walletInput" type="number" min="1" value={redeemAmount} onChange={(e) => setRedeemAmount(Number(e.target.value) || 0)} placeholder="Enter virtual coins" />
+      <button className="primary" onClick={requestRedeem}>Apply for Redemption</button>
+    </section>
+
+    {!!message && <div className="note">{message}</div>}
+    <section className="marketBlock">
+      <div className="marketHeader"><div><b>Coin Request History</b></div></div>
+      {!requests.length ? <div className="empty">No coin requests yet.</div> : requests.slice(0, 8).map((r) => <div className="slip" key={r.id}><div><b>{r.id}</b><small>🪙 {fmt(r.coins)} · {new Date(r.createdAt).toLocaleString("en-IN")}</small></div><strong>{r.status}</strong></div>)}
+    </section>
+
+    <section className="marketBlock">
+      <div className="marketHeader"><div><b>Redemption History</b></div></div>
+      {!redeems.length ? <div className="empty">No redemption requests yet.</div> : redeems.slice(0, 8).map((r) => <div className="slip" key={r.id}><div><b>{r.id}</b><small>🪙 {fmt(r.coins)} · {new Date(r.createdAt).toLocaleString("en-IN")}</small></div><strong>{r.status}</strong></div>)}
+    </section>
+
+    <div className="note">🛡️ Virtual coins only. No deposits, UPI payments, bank transfers, or cash value are processed by this demo wallet.</div>
+  </div>;
+}
+
+function Admin({ coins, setCoins, back }) {
+  const [requests, setRequests] = useState(() => { try { return JSON.parse(localStorage.getItem("novaCoinRequests") || "[]"); } catch { return []; } });
+  const [redeems, setRedeems] = useState(() => { try { return JSON.parse(localStorage.getItem("novaRedeemRequests") || "[]"); } catch { return []; } });
+  const [message, setMessage] = useState("");
+
+  useEffect(() => localStorage.setItem("novaCoinRequests", JSON.stringify(requests)), [requests]);
+  useEffect(() => localStorage.setItem("novaRedeemRequests", JSON.stringify(redeems)), [redeems]);
+
+  function approveCoin(id) {
+    setRequests((items) => items.map((r) => {
+      if (r.id !== id || r.status !== "PENDING") return r;
+      setCoins((c) => c + Number(r.coins));
+      setMessage(`Approved ${r.id}: 🪙 ${fmt(r.coins)} added to demo wallet.`);
+      return { ...r, status: "APPROVED", approvedAt: new Date().toISOString() };
+    }));
+  }
+
+  function rejectCoin(id) {
+    setRequests((items) => items.map((r) => r.id === id && r.status === "PENDING" ? { ...r, status: "REJECTED", rejectedAt: new Date().toISOString() } : r));
+    setMessage(`Coin request ${id} rejected.`);
+  }
+
+  function approveRedeem(id) {
+    setRedeems((items) => items.map((r) => {
+      if (r.id !== id || r.status !== "PENDING") return r;
+      if (Number(r.coins) > coins) { setMessage(`Cannot approve ${r.id}: insufficient virtual coins.`); return r; }
+      setCoins((c) => c - Number(r.coins));
+      setMessage(`Approved ${r.id}: 🪙 ${fmt(r.coins)} deducted from demo wallet.`);
+      return { ...r, status: "APPROVED", approvedAt: new Date().toISOString() };
+    }));
+  }
+
+  function rejectRedeem(id) {
+    setRedeems((items) => items.map((r) => r.id === id && r.status === "PENDING" ? { ...r, status: "REJECTED", rejectedAt: new Date().toISOString() } : r));
+    setMessage(`Redemption ${id} rejected.`);
+  }
+
+  return <div className="page">
+    <div className="title"><div><small>ADMIN DEMO</small><h1>Wallet Requests</h1></div><button onClick={back}>← Wallet</button></div>
+    <section className="balance"><small>DEMO WALLET BALANCE</small><h1>🪙 {fmt(coins)}</h1></section>
+    {message && <div className="note">{message}</div>}
+
+    <section className="marketBlock"><div className="marketHeader"><div><b>Coin Requests</b><small>Approve to credit virtual coins</small></div></div>
+      {!requests.length ? <div className="empty">No requests.</div> : requests.map((r) => <div className="slip" key={r.id}><div><b>{r.id}</b><small>🪙 {fmt(r.coins)} · {new Date(r.createdAt).toLocaleString("en-IN")}</small></div><div>{r.status === "PENDING" ? <><button onClick={() => approveCoin(r.id)}>Approve</button> <button onClick={() => rejectCoin(r.id)}>Reject</button></> : <strong>{r.status}</strong>}</div></div>)}
+    </section>
+
+    <section className="marketBlock"><div className="marketHeader"><div><b>Redemption Requests</b><small>Approve to deduct virtual coins</small></div></div>
+      {!redeems.length ? <div className="empty">No requests.</div> : redeems.map((r) => <div className="slip" key={r.id}><div><b>{r.id}</b><small>🪙 {fmt(r.coins)} · {new Date(r.createdAt).toLocaleString("en-IN")}</small></div><div>{r.status === "PENDING" ? <><button onClick={() => approveRedeem(r.id)}>Approve</button> <button onClick={() => rejectRedeem(r.id)}>Reject</button></> : <strong>{r.status}</strong>}</div></div>)}
+    </section>
+    <div className="note">Demo/admin controls are stored in this browser's local storage and are not a production authentication system.</div>
+  </div>;
 }
 
 function Games() { return <div className="page"><small>GAME LOUNGE</small><h1>Play Zone</h1><section className="gameHero"><h2>Neon Game Night</h2><p>Arcade-style demo games using virtual coins.</p>✨</section><div className="games">{["🎰 Neon Slots", "🎲 Dice Lab", "🃏 Card Room", "🎯 Spin Arena", "🕹️ Retro Rush", "🏆 Prize Room"].map((x) => <button key={x}><b>{x.split(" ")[0]}</b>{x.slice(2)}<small>Demo game</small></button>)}</div></div>; }
