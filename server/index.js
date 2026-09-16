@@ -19,7 +19,6 @@ app.use(express.json());
 
 const cache = new Map();
 
-// 60-second cache
 const CACHE_MS = 60 * 1000;
 
 function getCached(key) {
@@ -172,10 +171,6 @@ function findWinnerMarket(fixture) {
     ? fixture.markets
     : [];
 
-  /*
-    First try the official canonical market key.
-  */
-
   let market = markets.find(
     (m) =>
       String(m?.canonical || "").toLowerCase() ===
@@ -185,10 +180,6 @@ function findWinnerMarket(fixture) {
   if (market) {
     return market;
   }
-
-  /*
-    Fallback for different provider naming.
-  */
 
   market = markets.find((m) => {
     const text = String(
@@ -244,7 +235,6 @@ function getSelectionName(
     value !== null
   ) {
     const text = String(value);
-
     const lower = text.toLowerCase();
 
     if (
@@ -273,10 +263,6 @@ function getSelectionName(
       return "Draw";
     }
   }
-
-  /*
-    Some feeds may use competitor index.
-  */
 
   if (
     selection?.competitor_id &&
@@ -311,18 +297,32 @@ function makeLayPrice(backPrice) {
   /*
     NOVA PLAY virtual/demo lay calculation.
 
-    Back <= 5.00
-      Lay = Back + 0.04
+    Back < 5.00
+      Lay = Back + 2%
 
-    Back > 5.00
+    Back >= 5.00
       Lay = Back + 1.00
+
+    Examples:
+
+    1.50 -> 1.53
+    1.75 -> 1.79
+    2.00 -> 2.04
+    4.99 -> 5.09
+    5.00 -> 6.00
+    5.01 -> 6.01
+    6.00 -> 7.00
   */
 
-  if (price > 5) {
-    return Number((price + 1).toFixed(2));
+  if (price < 5) {
+    return Number(
+      (price * 1.02).toFixed(2)
+    );
   }
 
-  return Number((price * 1.02).toFixed(2));
+  return Number(
+    (price + 1).toFixed(2)
+  );
 }
 
 /* =====================================================
@@ -388,9 +388,9 @@ function normalizeFixture(fixture) {
     competitors[1]?.name ||
     "Team 2";
 
-  /*
-    Find Match Winner.
-  */
+  /* ===================================================
+     FIND MATCH WINNER
+  =================================================== */
 
   const winnerMarket =
     findWinnerMarket(fixture);
@@ -447,11 +447,6 @@ function normalizeFixture(fixture) {
       name,
       price,
 
-      /*
-        Keep provider selection information
-        for future use.
-      */
-
       selection_id:
         selection?.id ??
         selection?.selection_id ??
@@ -471,24 +466,17 @@ function normalizeFixture(fixture) {
     });
   }
 
-  /*
-    Match winner normally needs at least
-    two selections.
-  */
+  /* ===================================================
+     MATCH WINNER NEEDS TWO SELECTIONS
+  =================================================== */
 
   if (outcomes.length < 2) {
     return null;
   }
 
-  /*
-    Create h2h_lay.
-
-    If provider has a real lay price,
-    use it.
-
-    Otherwise use our NOVA PLAY virtual
-    lay calculation.
-  */
+  /* ===================================================
+     CREATE LAY MARKET
+  =================================================== */
 
   const layOutcomes =
     outcomes.map((outcome) => ({
@@ -499,9 +487,9 @@ function normalizeFixture(fixture) {
         makeLayPrice(outcome.price)
     }));
 
-  /*
-    LIVE detection.
-  */
+  /* ===================================================
+     LIVE DETECTION
+  =================================================== */
 
   const phase =
     String(
@@ -518,9 +506,9 @@ function normalizeFixture(fixture) {
     phase === "inplay" ||
     phase === "in_play";
 
-  /*
-    Start / commence time.
-  */
+  /* ===================================================
+     START TIME
+  =================================================== */
 
   const commenceTime =
     fixture?.start_time ??
@@ -530,9 +518,9 @@ function normalizeFixture(fixture) {
     fixture?.startTime ??
     null;
 
-  /*
-    Competition.
-  */
+  /* ===================================================
+     COMPETITION
+  =================================================== */
 
   const competition =
     fixture?.competition ??
@@ -540,9 +528,9 @@ function normalizeFixture(fixture) {
     fixture?.tournament ??
     null;
 
-  /*
-    Provider bookmaker object.
-  */
+  /* ===================================================
+     BOOKMAKER OBJECT
+  =================================================== */
 
   const bookmaker = {
     key: "oddsradarwire",
@@ -563,9 +551,11 @@ function normalizeFixture(fixture) {
             selection_id:
               o.selection_id,
 
-            line: o.line,
+            line:
+              o.line,
 
-            status: o.status
+            status:
+              o.status
           })
         )
       },
@@ -580,6 +570,10 @@ function normalizeFixture(fixture) {
     ]
   };
 
+  /* ===================================================
+     RETURN NORMALIZED EVENT
+  =================================================== */
+
   return {
     id: String(fixtureId),
 
@@ -588,17 +582,21 @@ function normalizeFixture(fixture) {
     ).toLowerCase(),
 
     home_team: homeTeam,
+
     away_team: awayTeam,
 
     homeTeam,
+
     awayTeam,
 
     commence_time: commenceTime,
+
     commenceTime,
 
     time: commenceTime,
 
     live: isLive,
+
     in_play: isLive,
 
     status:
@@ -738,9 +736,9 @@ app.get(
       const cacheKey =
         `odds:${sportKey}`;
 
-      /*
-        Return cached data if available.
-      */
+      /* ===============================================
+         RETURN CACHE
+      =============================================== */
 
       const cached =
         getCached(cacheKey);
@@ -767,7 +765,7 @@ app.get(
         to the provider.
 
         We retrieve fixtures first and
-        find the Match Winner market locally.
+        find Match Winner locally.
       */
 
       const livePromise =
@@ -775,9 +773,12 @@ app.get(
           "/v1/fixtures",
           {
             event_type: "live",
+
             sport:
               sport.providerSport,
+
             tier: 1,
+
             limit: 100
           }
         );
@@ -787,9 +788,12 @@ app.get(
           "/v1/fixtures",
           {
             event_type: "prematch",
+
             sport:
               sport.providerSport,
+
             tier: 1,
+
             limit: 100
           }
         );
@@ -817,18 +821,18 @@ app.get(
         `[OddsRadarWire] ${sportKey}: live=${liveFixtures.length}, prematch=${prematchFixtures.length}`
       );
 
-      /*
-        Combine both boards.
-      */
+      /* ===============================================
+         COMBINE
+      =============================================== */
 
       const allFixtures = [
         ...liveFixtures,
         ...prematchFixtures
       ];
 
-      /*
-        Remove duplicates.
-      */
+      /* ===============================================
+         REMOVE DUPLICATES
+      =============================================== */
 
       const unique =
         uniqueFixtures(
@@ -839,9 +843,9 @@ app.get(
         `[OddsRadarWire] ${sportKey}: unique=${unique.length}`
       );
 
-      /*
-        Normalize.
-      */
+      /* ===============================================
+         NORMALIZE
+      =============================================== */
 
       const normalized = [];
 
@@ -863,17 +867,17 @@ app.get(
         }
       }
 
-      /*
-        LIVE first, then upcoming.
-      */
+      /* ===============================================
+         SORT
+      =============================================== */
 
       sortFixtures(
         normalized
       );
 
-      /*
-        Cache result.
-      */
+      /* ===============================================
+         CACHE
+      =============================================== */
 
       setCached(
         cacheKey,
@@ -1028,7 +1032,7 @@ app.get(
 
 /* =====================================================
    DEBUG ROUTE
-   Shows provider fixture counts WITHOUT exposing API key.
+   Shows provider fixture counts WITHOUT API KEY.
 ===================================================== */
 
 app.get(
@@ -1062,9 +1066,12 @@ app.get(
             "/v1/fixtures",
             {
               event_type: "live",
+
               sport:
                 sport.providerSport,
+
               tier: 1,
+
               limit: 100
             }
           ),
@@ -1073,9 +1080,12 @@ app.get(
             "/v1/fixtures",
             {
               event_type: "prematch",
+
               sport:
                 sport.providerSport,
+
               tier: 1,
+
               limit: 100
             }
           )
