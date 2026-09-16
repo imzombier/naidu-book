@@ -1,5 +1,9 @@
-const express = require("express");
-const path = require("path");
+import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 
@@ -9,20 +13,21 @@ const API_KEY = process.env.ODDSRADARWIRE_API_KEY;
 
 app.use(express.json());
 
-/* -------------------------------------------------------
-   SIMPLE CACHE
-   Free OddsRadarWire plan = 100 REST calls/day.
-   We cache for 60 seconds so the website doesn't
-   repeatedly consume the API quota.
-------------------------------------------------------- */
+/* =====================================================
+   CACHE
+===================================================== */
 
 const cache = new Map();
+
+// 60-second cache
 const CACHE_MS = 60 * 1000;
 
 function getCached(key) {
   const item = cache.get(key);
 
-  if (!item) return null;
+  if (!item) {
+    return null;
+  }
 
   if (Date.now() - item.time > CACHE_MS) {
     cache.delete(key);
@@ -39,9 +44,9 @@ function setCached(key, data) {
   });
 }
 
-/* -------------------------------------------------------
+/* =====================================================
    SPORTS
-------------------------------------------------------- */
+===================================================== */
 
 const SPORTS = {
   cricket: {
@@ -69,32 +74,39 @@ const SPORTS = {
   }
 };
 
-/* -------------------------------------------------------
-   ODDSRADARWIRE REQUEST
-------------------------------------------------------- */
+/* =====================================================
+   ODDSRADARWIRE API REQUEST
+===================================================== */
 
 async function oddsRadarRequest(endpoint, params = {}) {
   if (!API_KEY) {
-    throw new Error("ODDSRADARWIRE_API_KEY is missing");
+    throw new Error(
+      "ODDSRADARWIRE_API_KEY is missing from Render environment variables"
+    );
   }
 
   const url = new URL(BASE_URL + endpoint);
 
-  Object.entries(params).forEach(([key, value]) => {
+  for (const [key, value] of Object.entries(params)) {
     if (
       value !== undefined &&
       value !== null &&
       value !== ""
     ) {
-      url.searchParams.set(key, value);
+      url.searchParams.set(key, String(value));
     }
-  });
+  }
+
+  console.log(
+    `[OddsRadarWire] GET ${url.pathname}${url.search}`
+  );
 
   const response = await fetch(url, {
     method: "GET",
+
     headers: {
       "x-api-key": API_KEY,
-      "accept": "application/json"
+      "Accept": "application/json"
     }
   });
 
@@ -106,25 +118,26 @@ async function oddsRadarRequest(endpoint, params = {}) {
     data = JSON.parse(text);
   } catch {
     throw new Error(
-      `OddsRadarWire returned invalid JSON (${response.status})`
+      `OddsRadarWire returned invalid JSON. HTTP ${response.status}`
     );
   }
 
   if (!response.ok) {
-    const errorMessage =
+    const message =
       data?.message ||
       data?.error ||
+      data?.detail ||
       `OddsRadarWire HTTP ${response.status}`;
 
-    throw new Error(errorMessage);
+    throw new Error(message);
   }
 
   return data;
 }
 
-/* -------------------------------------------------------
-   GET FIXTURE ARRAY
-------------------------------------------------------- */
+/* =====================================================
+   EXTRACT FIXTURES
+===================================================== */
 
 function extractFixtures(data) {
   if (Array.isArray(data)) {
@@ -143,31 +156,46 @@ function extractFixtures(data) {
     return data.events;
   }
 
+  if (Array.isArray(data?.results)) {
+    return data.results;
+  }
+
   return [];
 }
 
-/* -------------------------------------------------------
+/* =====================================================
    FIND MATCH WINNER MARKET
-------------------------------------------------------- */
+===================================================== */
 
 function findWinnerMarket(fixture) {
   const markets = Array.isArray(fixture?.markets)
     ? fixture.markets
     : [];
 
-  // Prefer the documented canonical key.
+  /*
+    First try the official canonical market key.
+  */
+
   let market = markets.find(
-    m =>
+    (m) =>
       String(m?.canonical || "").toLowerCase() ===
       "match_winner"
   );
 
-  if (market) return market;
+  if (market) {
+    return market;
+  }
 
-  // Fallback for provider naming differences.
-  market = markets.find(m => {
+  /*
+    Fallback for different provider naming.
+  */
+
+  market = markets.find((m) => {
     const text = String(
-      m?.market || m?.name || ""
+      m?.market ||
+      m?.name ||
+      m?.market_name ||
+      ""
     ).toLowerCase();
 
     return (
@@ -180,36 +208,64 @@ function findWinnerMarket(fixture) {
   return market || null;
 }
 
-/* -------------------------------------------------------
-   GET SELECTION NAME
-------------------------------------------------------- */
+/* =====================================================
+   GET COMPETITORS
+===================================================== */
 
-function selectionName(selection, competitors) {
-  const raw =
-    selection?.name ||
-    selection?.label ||
-    selection?.selection ||
-    selection?.outcome ||
+function getCompetitors(fixture) {
+  if (Array.isArray(fixture?.competitors)) {
+    return fixture.competitors;
+  }
+
+  if (Array.isArray(fixture?.participants)) {
+    return fixture.participants;
+  }
+
+  return [];
+}
+
+/* =====================================================
+   SELECTION NAME
+===================================================== */
+
+function getSelectionName(
+  selection,
+  competitors
+) {
+  let value =
+    selection?.name ??
+    selection?.label ??
+    selection?.selection ??
+    selection?.outcome ??
     selection?.side;
 
-  if (raw !== undefined && raw !== null) {
-    const value = String(raw);
+  if (
+    value !== undefined &&
+    value !== null
+  ) {
+    const text = String(value);
 
-    const lower = value.toLowerCase();
+    const lower = text.toLowerCase();
 
     if (
       lower !== "home" &&
       lower !== "away" &&
       lower !== "draw"
     ) {
-      return value;
+      return text;
     }
 
-    if (lower === "home" && competitors[0]) {
+    if (
+      lower === "home" &&
+      competitors[0]?.name
+    ) {
       return competitors[0].name;
     }
 
-    if (lower === "away" && competitors[1]) {
+    if (
+      lower === "away" &&
+      competitors[1]?.name
+    ) {
       return competitors[1].name;
     }
 
@@ -218,55 +274,145 @@ function selectionName(selection, competitors) {
     }
   }
 
-  return "Selection";
+  /*
+    Some feeds may use competitor index.
+  */
+
+  if (
+    selection?.competitor_id &&
+    competitors.length
+  ) {
+    const competitor =
+      competitors.find(
+        (c) =>
+          String(c?.id) ===
+          String(selection.competitor_id)
+      );
+
+    if (competitor?.name) {
+      return competitor.name;
+    }
+  }
+
+  return null;
 }
 
-/* -------------------------------------------------------
-   CREATE LAY PRICE
-------------------------------------------------------- */
+/* =====================================================
+   LAY PRICE
+===================================================== */
 
 function makeLayPrice(backPrice) {
-  const price = Number(backPrice) || 0;
+  const price = Number(backPrice);
 
-  if (price <= 0) {
+  if (!Number.isFinite(price) || price <= 1) {
     return null;
   }
+
+  /*
+    NOVA PLAY virtual/demo lay calculation.
+
+    Back <= 5.00
+      Lay = Back + 0.04
+
+    Back > 5.00
+      Lay = Back + 1.00
+  */
 
   if (price > 5) {
-    return Number((price + 1).toFixed(2));
+    return Number(
+      (price + 1).toFixed(2)
+    );
   }
 
-  return Number((price + 0.04).toFixed(2));
+  return Number(
+    (price + 0.04).toFixed(2)
+  );
 }
 
-/* -------------------------------------------------------
+/* =====================================================
+   FIND REAL LAY PRICE
+===================================================== */
+
+function getRealLayPrice(selection) {
+  const possible =
+    selection?.lay_price ??
+    selection?.layPrice ??
+    selection?.lay ??
+    selection?.exchange_lay_price ??
+    null;
+
+  const price = Number(possible);
+
+  if (
+    Number.isFinite(price) &&
+    price > 1
+  ) {
+    return price;
+  }
+
+  return null;
+}
+
+/* =====================================================
    NORMALIZE ONE FIXTURE
-------------------------------------------------------- */
+===================================================== */
 
 function normalizeFixture(fixture) {
-  if (!fixture || !fixture.id) {
+  if (!fixture) {
     return null;
   }
 
-  const competitors = Array.isArray(fixture.competitors)
-    ? fixture.competitors
-    : [];
+  const fixtureId =
+    fixture.id ??
+    fixture.fixture_id ??
+    fixture.event_id;
+
+  if (!fixtureId) {
+    return null;
+  }
+
+  const competitors =
+    getCompetitors(fixture);
 
   if (competitors.length < 2) {
     return null;
   }
 
-  const winnerMarket = findWinnerMarket(fixture);
+  const homeTeam =
+    competitors.find(
+      (c) => c?.isHome === true
+    )?.name ||
+    competitors[0]?.name ||
+    "Team 1";
+
+  const awayTeam =
+    competitors.find(
+      (c) => c?.isHome === false
+    )?.name ||
+    competitors[1]?.name ||
+    "Team 2";
+
+  /*
+    Find Match Winner.
+  */
+
+  const winnerMarket =
+    findWinnerMarket(fixture);
 
   if (!winnerMarket) {
+    console.log(
+      `[OddsRadarWire] Fixture ${fixtureId}: no match_winner market`
+    );
+
     return null;
   }
 
-  const selections = Array.isArray(
-    winnerMarket.selections
-  )
-    ? winnerMarket.selections
-    : [];
+  const selections =
+    Array.isArray(
+      winnerMarket?.selections
+    )
+      ? winnerMarket.selections
+      : [];
 
   if (!selections.length) {
     return null;
@@ -275,351 +421,787 @@ function normalizeFixture(fixture) {
   const outcomes = [];
 
   for (const selection of selections) {
-    const price = Number(selection?.price);
-
-    if (!Number.isFinite(price) || price <= 1) {
-      continue;
-    }
-
-    const name = selectionName(
-      selection,
-      competitors
+    const price = Number(
+      selection?.price ??
+      selection?.odds ??
+      selection?.decimal_price
     );
 
-    if (!name || name === "Selection") {
+    if (
+      !Number.isFinite(price) ||
+      price <= 1
+    ) {
       continue;
     }
+
+    const name =
+      getSelectionName(
+        selection,
+        competitors
+      );
+
+    if (!name) {
+      continue;
+    }
+
+    const realLay =
+      getRealLayPrice(selection);
 
     outcomes.push({
       name,
-      price
+      price,
+
+      /*
+        Keep provider selection information
+        for future use.
+      */
+
+      selection_id:
+        selection?.id ??
+        selection?.selection_id ??
+        null,
+
+      line:
+        selection?.line ??
+        null,
+
+      status:
+        selection?.status ??
+        winnerMarket?.status ??
+        "OPEN",
+
+      layPrice:
+        realLay
     });
   }
+
+  /*
+    Match winner normally needs at least
+    two selections.
+  */
 
   if (outcomes.length < 2) {
     return null;
   }
 
-  const layOutcomes = outcomes.map(outcome => ({
-    name: outcome.name,
-    price: makeLayPrice(outcome.price)
-  }));
+  /*
+    Create h2h_lay.
+
+    If provider has a real lay price,
+    use it.
+
+    Otherwise use our NOVA PLAY virtual
+    lay calculation.
+  */
+
+  const layOutcomes =
+    outcomes.map((outcome) => ({
+      name: outcome.name,
+
+      price:
+        outcome.layPrice ??
+        makeLayPrice(outcome.price)
+    }));
+
+  /*
+    LIVE detection.
+  */
+
+  const phase =
+    String(
+      fixture?.phase ||
+      fixture?.status ||
+      ""
+    ).toLowerCase();
 
   const isLive =
-    fixture.phase === "live" ||
-    fixture.in_play === true ||
-    fixture.inPlay === true;
+    phase === "live" ||
+    phase === "inplay" ||
+    phase === "in_play" ||
+    fixture?.in_play === true ||
+    fixture?.inPlay === true;
+
+  /*
+    Start / commence time.
+  */
 
   const commenceTime =
-    fixture.start_time ||
-    fixture.commence_time ||
-    fixture.scheduled_start ||
-    fixture.startTime ||
+    fixture?.start_time ??
+    fixture?.commence_time ??
+    fixture?.scheduled_start ??
+    fixture?.scheduledStart ??
+    fixture?.startTime ??
     null;
 
+  /*
+    Competition.
+  */
+
+  const competition =
+    fixture?.competition ??
+    fixture?.league ??
+    fixture?.tournament ??
+    null;
+
+  /*
+    Provider bookmaker object.
+  */
+
+  const bookmaker = {
+    key: "oddsradarwire",
+
+    title: "OddsRadarWire",
+
+    markets: [
+      {
+        key: "h2h",
+
+        market: "Match Winner",
+
+        outcomes: outcomes.map(
+          (o) => ({
+            name: o.name,
+            price: o.price,
+
+            selection_id:
+              o.selection_id,
+
+            line: o.line,
+
+            status: o.status
+          })
+        )
+      },
+
+      {
+        key: "h2h_lay",
+
+        market: "Match Winner Lay",
+
+        outcomes: layOutcomes
+      }
+    ]
+  };
+
   return {
-    id: fixture.id,
+    id: String(fixtureId),
 
     sport: String(
-      fixture.sport || ""
+      fixture?.sport || ""
     ).toLowerCase(),
 
-    home_team:
-      competitors[0]?.name || "Team 1",
+    home_team: homeTeam,
+    away_team: awayTeam,
 
-    away_team:
-      competitors[1]?.name || "Team 2",
-
-    homeTeam:
-      competitors[0]?.name || "Team 1",
-
-    awayTeam:
-      competitors[1]?.name || "Team 2",
+    homeTeam,
+    awayTeam,
 
     commence_time: commenceTime,
-
     commenceTime,
 
-    time:
-      commenceTime,
+    time: commenceTime,
 
     live: isLive,
-
     in_play: isLive,
 
     status:
-      isLive ? "LIVE" : "UPCOMING",
+      isLive
+        ? "LIVE"
+        : "UPCOMING",
 
     phase:
-      fixture.phase || null,
+      fixture?.phase ?? null,
 
-    competition:
-      fixture.competition || null,
+    competition,
+
+    provider:
+      fixture?.provider ??
+      "ODDSRADARWIRE",
 
     bookmakers: [
-      {
-        key: "oddsradarwire",
-        title: "OddsRadarWire",
-
-        markets: [
-          {
-            key: "h2h",
-            market: "Match Winner",
-            outcomes
-          },
-
-          {
-            key: "h2h_lay",
-            market: "Match Winner Lay",
-            outcomes: layOutcomes
-          }
-        ]
-      }
+      bookmaker
     ],
 
-    // Easier access for our frontend.
-    h2h: outcomes,
+    h2h: outcomes.map(
+      (o) => ({
+        name: o.name,
+        price: o.price
+      })
+    ),
 
     h2h_lay: layOutcomes
   };
 }
 
-/* -------------------------------------------------------
-   GET ODDS
-------------------------------------------------------- */
+/* =====================================================
+   REMOVE DUPLICATES
+===================================================== */
 
-app.get("/api/odds/:sport", async (req, res) => {
-  try {
-    const sportKey = String(
-      req.params.sport || ""
-    ).toLowerCase();
+function uniqueFixtures(fixtures) {
+  const result = [];
+  const seen = new Set();
 
-    const sport = SPORTS[sportKey];
+  for (const fixture of fixtures) {
+    const id =
+      fixture?.id ??
+      fixture?.fixture_id ??
+      fixture?.event_id;
 
-    if (!sport) {
-      return res.status(400).json({
-        error: "Unsupported sport",
-        supported: Object.keys(SPORTS)
+    if (!id) {
+      continue;
+    }
+
+    const key = String(id);
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(fixture);
+  }
+
+  return result;
+}
+
+/* =====================================================
+   SORT MATCHES
+===================================================== */
+
+function sortFixtures(fixtures) {
+  return fixtures.sort(
+    (a, b) => {
+      /*
+        LIVE first.
+      */
+
+      if (
+        a.live &&
+        !b.live
+      ) {
+        return -1;
+      }
+
+      if (
+        !a.live &&
+        b.live
+      ) {
+        return 1;
+      }
+
+      /*
+        Then by start time.
+      */
+
+      const timeA =
+        a.commence_time
+          ? new Date(
+              a.commence_time
+            ).getTime()
+          : Number.MAX_SAFE_INTEGER;
+
+      const timeB =
+        b.commence_time
+          ? new Date(
+              b.commence_time
+            ).getTime()
+          : Number.MAX_SAFE_INTEGER;
+
+      return timeA - timeB;
+    }
+  );
+}
+
+/* =====================================================
+   ODDS ROUTE
+===================================================== */
+
+app.get(
+  "/api/odds/:sport",
+  async (req, res) => {
+    try {
+      const sportKey =
+        String(
+          req.params.sport || ""
+        ).toLowerCase();
+
+      const sport =
+        SPORTS[sportKey];
+
+      if (!sport) {
+        return res.status(400).json({
+          error:
+            "Unsupported sport",
+
+          supported:
+            Object.keys(SPORTS)
+        });
+      }
+
+      const cacheKey =
+        `odds:${sportKey}`;
+
+      /*
+        Return cached data if available.
+      */
+
+      const cached =
+        getCached(cacheKey);
+
+      if (cached) {
+        console.log(
+          `[OddsRadarWire] ${sportKey}: returning cached data (${cached.length})`
+        );
+
+        return res.json(cached);
+      }
+
+      console.log(
+        `[OddsRadarWire] Loading ${sportKey} fixtures...`
+      );
+
+      /*
+        IMPORTANT:
+
+        We deliberately DO NOT send:
+
+        canonical=match_winner
+
+        to the provider.
+
+        We retrieve fixtures first and
+        find the Match Winner market locally.
+      */
+
+      const livePromise =
+        oddsRadarRequest(
+          "/v1/fixtures",
+          {
+            event_type: "live",
+            sport:
+              sport.providerSport,
+            tier: 1,
+            limit: 100
+          }
+        );
+
+      const prematchPromise =
+        oddsRadarRequest(
+          "/v1/fixtures",
+          {
+            event_type: "prematch",
+            sport:
+              sport.providerSport,
+            tier: 1,
+            limit: 100
+          }
+        );
+
+      const [
+        liveData,
+        prematchData
+      ] =
+        await Promise.all([
+          livePromise,
+          prematchPromise
+        ]);
+
+      const liveFixtures =
+        extractFixtures(
+          liveData
+        );
+
+      const prematchFixtures =
+        extractFixtures(
+          prematchData
+        );
+
+      console.log(
+        `[OddsRadarWire] ${sportKey}: live=${liveFixtures.length}, prematch=${prematchFixtures.length}`
+      );
+
+      /*
+        Combine both boards.
+      */
+
+      const allFixtures = [
+        ...liveFixtures,
+        ...prematchFixtures
+      ];
+
+      /*
+        Remove duplicates.
+      */
+
+      const unique =
+        uniqueFixtures(
+          allFixtures
+        );
+
+      console.log(
+        `[OddsRadarWire] ${sportKey}: unique=${unique.length}`
+      );
+
+      /*
+        Normalize.
+      */
+
+      const normalized = [];
+
+      for (const fixture of unique) {
+        try {
+          const item =
+            normalizeFixture(
+              fixture
+            );
+
+          if (item) {
+            normalized.push(item);
+          }
+        } catch (error) {
+          console.error(
+            `[OddsRadarWire] Failed to normalize fixture ${fixture?.id}:`,
+            error.message
+          );
+        }
+      }
+
+      /*
+        LIVE first, then upcoming.
+      */
+
+      sortFixtures(
+        normalized
+      );
+
+      /*
+        Cache result.
+      */
+
+      setCached(
+        cacheKey,
+        normalized
+      );
+
+      console.log(
+        `[OddsRadarWire] ${sportKey}: provider=${allFixtures.length}, normalized=${normalized.length}`
+      );
+
+      return res.json(
+        normalized
+      );
+
+    } catch (error) {
+      console.error(
+        "[OddsRadarWire ERROR]",
+        error
+      );
+
+      return res.status(502).json({
+        error:
+          "Unable to load odds",
+
+        message:
+          error.message
       });
     }
-
-    const cacheKey = `odds:${sportKey}`;
-
-    const cached = getCached(cacheKey);
-
-    if (cached) {
-      return res.json(cached);
-    }
-
-    /*
-      IMPORTANT:
-
-      We intentionally do NOT send:
-
-      canonical=match_winner
-
-      here.
-
-      We first retrieve the actual fixtures and then
-      locate match_winner locally. This prevents a provider
-      filtering difference from turning the entire response
-      into [].
-    */
-
-    const [liveData, prematchData] =
-      await Promise.all([
-        oddsRadarRequest("/v1/fixtures", {
-          event_type: "live",
-          sport: sport.providerSport,
-          tier: 1,
-          limit: 100
-        }),
-
-        oddsRadarRequest("/v1/fixtures", {
-          event_type: "prematch",
-          sport: sport.providerSport,
-          tier: 1,
-          limit: 100
-        })
-      ]);
-
-    const liveFixtures =
-      extractFixtures(liveData);
-
-    const prematchFixtures =
-      extractFixtures(prematchData);
-
-    const allFixtures = [
-      ...liveFixtures,
-      ...prematchFixtures
-    ];
-
-    // Remove duplicate fixture IDs.
-    const uniqueFixtures = [];
-    const seen = new Set();
-
-    for (const fixture of allFixtures) {
-      const id = fixture?.id;
-
-      if (!id || seen.has(id)) {
-        continue;
-      }
-
-      seen.add(id);
-      uniqueFixtures.push(fixture);
-    }
-
-    const normalized = [];
-
-    for (const fixture of uniqueFixtures) {
-      const item = normalizeFixture(fixture);
-
-      if (item) {
-        normalized.push(item);
-      }
-    }
-
-    /*
-      LIVE first, then upcoming.
-    */
-
-    normalized.sort((a, b) => {
-      if (a.live && !b.live) return -1;
-      if (!a.live && b.live) return 1;
-
-      const ta = a.commence_time
-        ? new Date(a.commence_time).getTime()
-        : Infinity;
-
-      const tb = b.commence_time
-        ? new Date(b.commence_time).getTime()
-        : Infinity;
-
-      return ta - tb;
-    });
-
-    setCached(cacheKey, normalized);
-
-    console.log(
-      `[OddsRadarWire] ${sportKey}: provider=${allFixtures.length}, normalized=${normalized.length}`
-    );
-
-    return res.json(normalized);
-
-  } catch (error) {
-    console.error(
-      "[OddsRadarWire ERROR]",
-      error
-    );
-
-    return res.status(502).json({
-      error: "Unable to load odds",
-      message: error.message
-    });
   }
-});
-
-/* -------------------------------------------------------
-   SPORTS
-------------------------------------------------------- */
-
-app.get("/api/sports", (req, res) => {
-  res.json(
-    Object.values(SPORTS).map(sport => ({
-      key: sport.key,
-      group:
-        sport.key === "soccer"
-          ? "Football"
-          : sport.title,
-
-      title: sport.title,
-
-      description:
-        `${sport.title} odds`,
-
-      active: true,
-
-      has_outrights: false
-    }))
-  );
-});
-
-/* -------------------------------------------------------
-   PROVIDER ACCOUNT
-------------------------------------------------------- */
-
-app.get("/api/provider/me", async (req, res) => {
-  try {
-    const data =
-      await oddsRadarRequest("/v1/me");
-
-    res.json(data);
-
-  } catch (error) {
-    res.status(502).json({
-      error: error.message
-    });
-  }
-});
-
-/* -------------------------------------------------------
-   PROVIDER HEALTH
-------------------------------------------------------- */
-
-app.get("/api/provider/health", async (req, res) => {
-  try {
-    const data =
-      await oddsRadarRequest("/v1/health");
-
-    res.json(data);
-
-  } catch (error) {
-    res.status(502).json({
-      error: error.message
-    });
-  }
-});
-
-/* -------------------------------------------------------
-   BASIC HEALTH
-------------------------------------------------------- */
-
-app.get("/api/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "NOVA PLAY",
-    provider: "OddsRadarWire"
-  });
-});
-
-/* -------------------------------------------------------
-   FRONTEND
-------------------------------------------------------- */
-
-const distPath = path.join(
-  __dirname,
-  "../dist"
 );
+
+/* =====================================================
+   SPORTS ROUTE
+===================================================== */
+
+app.get(
+  "/api/sports",
+  (req, res) => {
+    const sports =
+      Object.values(
+        SPORTS
+      ).map(
+        (sport) => ({
+          key:
+            sport.key,
+
+          group:
+            sport.key ===
+            "soccer"
+              ? "Football"
+              : sport.title,
+
+          title:
+            sport.title,
+
+          description:
+            `${sport.title} odds`,
+
+          active: true,
+
+          has_outrights:
+            false
+        })
+      );
+
+    res.json(sports);
+  }
+);
+
+/* =====================================================
+   PROVIDER ACCOUNT
+===================================================== */
+
+app.get(
+  "/api/provider/me",
+  async (req, res) => {
+    try {
+      const data =
+        await oddsRadarRequest(
+          "/v1/me"
+        );
+
+      res.json(data);
+
+    } catch (error) {
+      console.error(
+        "[Provider ME ERROR]",
+        error
+      );
+
+      res.status(502).json({
+        error:
+          error.message
+      });
+    }
+  }
+);
+
+/* =====================================================
+   PROVIDER HEALTH
+===================================================== */
+
+app.get(
+  "/api/provider/health",
+  async (req, res) => {
+    try {
+      const data =
+        await oddsRadarRequest(
+          "/v1/health"
+        );
+
+      res.json(data);
+
+    } catch (error) {
+      console.error(
+        "[Provider HEALTH ERROR]",
+        error
+      );
+
+      res.status(502).json({
+        error:
+          error.message
+      });
+    }
+  }
+);
+
+/* =====================================================
+   NOVA PLAY HEALTH
+===================================================== */
+
+app.get(
+  "/api/health",
+  (req, res) => {
+    res.json({
+      ok: true,
+
+      service:
+        "NOVA PLAY",
+
+      provider:
+        "OddsRadarWire",
+
+      server:
+        "online",
+
+      time:
+        new Date().toISOString()
+    });
+  }
+);
+
+/* =====================================================
+   DEBUG ROUTE
+   Shows provider fixture counts WITHOUT exposing API key.
+===================================================== */
+
+app.get(
+  "/api/debug/:sport",
+  async (req, res) => {
+    try {
+      const sportKey =
+        String(
+          req.params.sport || ""
+        ).toLowerCase();
+
+      const sport =
+        SPORTS[sportKey];
+
+      if (!sport) {
+        return res.status(400).json({
+          error:
+            "Unsupported sport",
+
+          supported:
+            Object.keys(SPORTS)
+        });
+      }
+
+      const [
+        liveData,
+        prematchData
+      ] =
+        await Promise.all([
+          oddsRadarRequest(
+            "/v1/fixtures",
+            {
+              event_type: "live",
+              sport:
+                sport.providerSport,
+              tier: 1,
+              limit: 100
+            }
+          ),
+
+          oddsRadarRequest(
+            "/v1/fixtures",
+            {
+              event_type: "prematch",
+              sport:
+                sport.providerSport,
+              tier: 1,
+              limit: 100
+            }
+          )
+        ]);
+
+      const live =
+        extractFixtures(
+          liveData
+        );
+
+      const prematch =
+        extractFixtures(
+          prematchData
+        );
+
+      const all = [
+        ...live,
+        ...prematch
+      ];
+
+      const marketSummary =
+        {};
+
+      for (const fixture of all) {
+        const markets =
+          Array.isArray(
+            fixture?.markets
+          )
+            ? fixture.markets
+            : [];
+
+        for (const market of markets) {
+          const canonical =
+            market?.canonical ||
+            market?.market ||
+            market?.name ||
+            "unknown";
+
+          marketSummary[
+            canonical
+          ] =
+            (marketSummary[
+              canonical
+            ] || 0) + 1;
+        }
+      }
+
+      res.json({
+        sport:
+          sport.providerSport,
+
+        live:
+          live.length,
+
+        prematch:
+          prematch.length,
+
+        total:
+          all.length,
+
+        markets:
+          marketSummary
+      });
+
+    } catch (error) {
+      console.error(
+        "[DEBUG ERROR]",
+        error
+      );
+
+      res.status(502).json({
+        error:
+          error.message
+      });
+    }
+  }
+);
+
+/* =====================================================
+   STATIC FRONTEND
+===================================================== */
+
+const distPath =
+  path.join(
+    __dirname,
+    "../dist"
+  );
 
 app.use(
-  express.static(distPath)
+  express.static(
+    distPath
+  )
 );
 
-app.get("/{*splat}", (req, res) => {
-  res.sendFile(
-    path.join(
-      distPath,
-      "index.html"
-    )
-  );
-});
+/* =====================================================
+   FRONTEND FALLBACK
+===================================================== */
 
-/* -------------------------------------------------------
-   START
-------------------------------------------------------- */
+app.get(
+  "/{*splat}",
+  (req, res) => {
+    res.sendFile(
+      path.join(
+        distPath,
+        "index.html"
+      )
+    );
+  }
+);
 
-app.listen(PORT, () => {
-  console.log(
-    `NOVA PLAY server running on port ${PORT}`
-  );
-});
+/* =====================================================
+   START SERVER
+===================================================== */
+
+app.listen(
+  PORT,
+  () => {
+    console.log(
+      `NOVA PLAY server running on port ${PORT}`
+    );
+
+    console.log(
+      `OddsRadarWire configured: ${Boolean(API_KEY)}`
+    );
+  }
+);
